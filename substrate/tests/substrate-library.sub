@@ -1,7 +1,7 @@
-;; The dynamic Lisp's forms and functions (lib/lisp.sub): case-lambda,
+;; Substrate's forms and functions (lib/substrate.sub): case-lambda,
 ;; case, do, numbers, characters, strings, vectors, bytevectors, lists,
 ;; equivalence, and write against display.
-(require-unqualified l "../lib/lisp.sub")
+(require-unqualified substrate "../lib/substrate.sub")
 
 (define area
   (case-lambda

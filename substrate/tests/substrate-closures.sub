@@ -1,7 +1,7 @@
-;; Closures in the dynamic Lisp (lib/lisp.sub): capturing, shared assigned
+;; Closures in Substrate (lib/substrate.sub): capturing, shared assigned
 ;; variables (boxes), higher-order functions, named let loops in constant
 ;; stack, nested lambdas, mutual recursion, and set!, whose value is #f.
-(require-unqualified l "../lib/lisp.sub")
+(require-unqualified substrate "../lib/substrate.sub")
 
 (define (make-adder n) (lambda (x) (+ x n)))
 

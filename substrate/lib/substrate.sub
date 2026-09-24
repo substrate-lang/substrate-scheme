@@ -1,10 +1,11 @@
-;; Lifecycle: permanent library: the dynamic Lisp (seed plan), a language
-;; defined on the kernel, which the compiler will be written in. It grows
-;; as the compiler needs.
+;; Lifecycle: permanent library: Substrate, the language most code is
+;; written in, defined on the Substrate kernel (the dynamic language of the
+;; seed plan). The compiler will be written in it, and it grows as the
+;; compiler needs.
 ;;
 ;; Values are the syntax library's data (spec 2.2) plus closures, vectors,
 ;; bytevectors, records, hash tables and boxes. Every value is an eqref,
-;; and #f is the only false value. A module written in this Lisp takes its
+;; and #f is the only false value. A module written in Substrate takes its
 ;; forms with require-unqualified:
 ;;
 ;;   (define (f x ...) body ...)   a function, bound to a closure
@@ -30,9 +31,9 @@
 ;;     (field accessor [modifier]) ...)
 ;;                                  records, as in R7RS
 ;;   (define-syntax (name stx) body ...), (define-syntax name expr)
-;;                                  a macro whose transformer is a Lisp
-;;                                  procedure; the module must also take
-;;                                  the Lisp at phase 1
+;;                                  a macro whose transformer is a
+;;                                  Substrate procedure; the module must
+;;                                  also take Substrate at phase 1
 ;;
 ;; and the functions the provide below lists, grouped as they are defined
 ;; at the end. A function given an argument of the wrong type, or the wrong
@@ -70,11 +71,11 @@
 (require s syntax)
 (require mt "match.sub" else)
 
-(provide [define lisp-define] [lambda lisp-lambda] [case-lambda lisp-case-lambda] [set! lisp-set!]
+(provide [define substrate-define] [lambda substrate-lambda] [case-lambda substrate-case-lambda] [set! substrate-set!]
          [#%app app] [#%datum datum]
-         [if lisp-if] cond else when unless and or [let lisp-let] letrec case do
+         [if substrate-if] cond else when unless and or [let substrate-let] letrec case do
          define-record-type
-         [define-syntax lisp-define-syntax]
+         [define-syntax substrate-define-syntax]
          ;; equivalence and predicates
          eq? eqv? equal? not boolean? procedure?
          ;; pairs and lists
@@ -679,16 +680,16 @@
       (if (ref.is_null parts) (return '#f))
       (if (s:null? parts) (return '#f))
       (if (i32.eqz (s:identifier? (s:car parts))) (return '#f))
-      (if (s:free-identifier=? (s:car parts) #'lisp-lambda)
+      (if (s:free-identifier=? (s:car parts) #'substrate-lambda)
           (return (marker (s:cons (clause-let (s:cadr parts) (s:cddr parts)) '()) name)))
-      (if (s:free-identifier=? (s:car parts) #'lisp-case-lambda)
+      (if (s:free-identifier=? (s:car parts) #'substrate-case-lambda)
           (return (marker (clause-lets (s:cdr parts)) name)))
       '#f))
 
   ;; (define (f . params) body ...), (define f (lambda ...)), (define f
   ;; (case-lambda ...)): a function, a closure in an immutable global,
   ;; whose code is named after f. (define x e): a variable.
-  (func (lisp-define [stx eqref]) -> eqref
+  (func (substrate-define [stx eqref]) -> eqref
     (let ([parts (s:syntax->list stx)])
       (if (s:identifier? (s:cadr parts))
           (let ([f (lambda-marker-of (s:caddr parts) (s:cadr parts))])
@@ -700,16 +701,16 @@
                   (convert #,(marker (s:cons (clause-let (s:cdr head) (s:cddr parts)) '()) name))))))
 
   ;; (lambda params body ...)
-  (func (lisp-lambda [stx eqref]) -> eqref
+  (func (substrate-lambda [stx eqref]) -> eqref
     (lambda-marker-of stx '#f))
 
   ;; (case-lambda [params body ...] ...): a function with a clause per
   ;; number of arguments; a call runs the first clause that takes them.
-  (func (lisp-case-lambda [stx eqref]) -> eqref
+  (func (substrate-case-lambda [stx eqref]) -> eqref
     (lambda-marker-of stx '#f))
 
   ;; (set! x e): the kernel's set!, which has no value, then #f.
-  (func (lisp-set! [stx eqref]) -> eqref
+  (func (substrate-set! [stx eqref]) -> eqref
     #`(begin (set! #,@(s:cdr (s:syntax->list stx))) '#f))
 
   ;; The first four arguments of a call, null where there are fewer.
@@ -765,7 +766,7 @@
   ;; ---- control ----
 
   ;; (if test then [else]): only #f is false.
-  (func (lisp-if [stx eqref]) -> eqref
+  (func (substrate-if [stx eqref]) -> eqref
     (let ([parts (s:syntax->list stx)])
       #`(if (ref.is_null #,(s:cadr parts))
             #,(if (i32.eq (s:length parts) 4) (s:car (s:cdddr parts)) #''#f)
@@ -773,23 +774,23 @@
 
   (func (when [stx eqref]) -> eqref
     (let ([parts (s:syntax->list stx)])
-      #`(lisp-if #,(s:cadr parts) (begin #,@(s:cddr parts)))))
+      #`(substrate-if #,(s:cadr parts) (begin #,@(s:cddr parts)))))
 
   (func (unless [stx eqref]) -> eqref
     (let ([parts (s:syntax->list stx)])
-      #`(lisp-if #,(s:cadr parts) '#f (begin #,@(s:cddr parts)))))
+      #`(substrate-if #,(s:cadr parts) '#f (begin #,@(s:cddr parts)))))
 
   (func (and [stx eqref]) -> eqref
     (let ([args (s:cdr (s:syntax->list stx))])
       (if (s:null? args) (return #''#t))
       (if (s:null? (s:cdr args)) (return (s:car args)))
-      #`(lisp-if #,(s:car args) (and #,@(s:cdr args)) '#f)))
+      #`(substrate-if #,(s:car args) (and #,@(s:cdr args)) '#f)))
 
   (func (or [stx eqref]) -> eqref
     (let ([args (s:cdr (s:syntax->list stx))])
       (if (s:null? args) (return #''#f))
       (if (s:null? (s:cdr args)) (return (s:car args)))
-      #`(let ([t #,(s:car args)]) (lisp-if t t (or #,@(s:cdr args))))))
+      #`(let ([t #,(s:car args)]) (substrate-if t t (or #,@(s:cdr args))))))
 
   ;; (cond [test body ...] ... [else body ...])
   (func (cond [stx eqref]) -> eqref
@@ -799,7 +800,7 @@
         (if (s:identifier? (s:car c))
             (if (s:free-identifier=? (s:car c) #'else)
                 (return #`(begin #,@(s:cdr c)))))
-        #`(lisp-if #,(s:car c) (begin #,@(s:cdr c)) (cond #,@(s:cdr clauses))))))
+        #`(substrate-if #,(s:car c) (begin #,@(s:cdr c)) (cond #,@(s:cdr clauses))))))
 
   (func (binding-names [bs eqref]) -> eqref
     (if (s:null? bs) '() (s:cons (s:car (s:syntax->list (s:car bs))) (binding-names (s:cdr bs)))))
@@ -808,11 +809,11 @@
     (if (s:null? bs) '() (s:cons (s:cadr (s:syntax->list (s:car bs))) (binding-inits (s:cdr bs)))))
 
   ;; (let ([x e] ...) body ...), or (let name ([x e] ...) body ...), a loop.
-  (func (lisp-let [stx eqref]) -> eqref
+  (func (substrate-let [stx eqref]) -> eqref
     (let ([parts (s:syntax->list stx)])
       (if (s:identifier? (s:cadr parts))
           (let ([bs (s:syntax->list (s:caddr parts))])
-            (return #`(letrec ([#,(s:cadr parts) (lisp-lambda (#,@(binding-names bs)) #,@(s:cdddr parts))])
+            (return #`(letrec ([#,(s:cadr parts) (substrate-lambda (#,@(binding-names bs)) #,@(s:cdddr parts))])
                         (app #,(s:cadr parts) #,@(binding-inits bs))))))
       #`(let #,@(s:cdr parts))))
 
@@ -853,8 +854,8 @@
     (let* ([parts (s:syntax->list stx)]
            [specs (s:syntax->list (s:cadr parts))]
            [end (s:syntax->list (s:caddr parts))])
-      #`(lisp-let loop (#,@(do-inits specs))
-          (lisp-if #,(s:car end)
+      #`(substrate-let loop (#,@(do-inits specs))
+          (substrate-if #,(s:car end)
                    (begin '#f #,@(s:cdr end))
                    (begin #,@(s:cdddr parts) (app loop #,@(do-steps specs)))))))
 
@@ -871,12 +872,13 @@
           (s:cons (if (s:null? (s:cddr spec)) (s:car spec) (s:caddr spec)) (do-steps (s:cdr specs))))))
 
   ;; (define-syntax (name stx) body ...), or (define-syntax name expr) where
-  ;; expr is a lambda or case-lambda: a macro whose transformer is a Lisp
-  ;; procedure, defined at phase 1 in the using module, which must take the
-  ;; Lisp there too: (begin-for-syntax (require-unqualified l "./lisp.sub")).
+  ;; expr is a lambda or case-lambda: a macro whose transformer is a
+  ;; Substrate procedure, defined at phase 1 in the using module, which must
+  ;; take Substrate there too:
+  ;; (begin-for-syntax (require-unqualified substrate ".../substrate.sub")).
   ;; Their names come from this macro's templates, so each use makes its
   ;; own; the define and the call are made with the use site's scopes, so
-  ;; they mean the Lisp's define and call there. Any other (define-syntax
+  ;; they mean Substrate's define and call there. Any other (define-syntax
   ;; name expr) is the kernel's: a kernel transformer function, or a
   ;; compile-time value. Racket makes a transformer of any procedure value;
   ;; here it must be written as one of these forms.
@@ -886,10 +888,10 @@
       (if (ref.is_null l) (return 0))
       (if (s:null? l) (return 0))
       (if (i32.eqz (s:identifier? (s:car l))) (return 0))
-      (if (s:free-identifier=? (s:car l) #'lisp-lambda) (return 1))
-      (s:free-identifier=? (s:car l) #'lisp-case-lambda)))
+      (if (s:free-identifier=? (s:car l) #'substrate-lambda) (return 1))
+      (s:free-identifier=? (s:car l) #'substrate-case-lambda)))
 
-  (func (lisp-define-syntax [stx eqref]) -> eqref
+  (func (substrate-define-syntax [stx eqref]) -> eqref
     (let* ([parts (s:syntax->list stx)] [head (s:cadr parts)])
       (if (s:identifier? head)
           (if (i32.eqz (procedure-form? (s:caddr parts)))
@@ -925,9 +927,9 @@
           (type T (sub final record (struct (field type (ref null record-type)) (field hash i32)
                                             #,@(field-types fields))))
           (global D (mut (ref null record-type)) (struct.new record-type '#,name '(#,@fields)))
-          (lisp-define (#,(s:car ctor) #,@(s:cdr ctor))
+          (substrate-define (#,(s:car ctor) #,@(s:cdr ctor))
             (struct.new T D (fresh-hash) #,@(field-inits fields (s:cdr ctor))))
-          (lisp-define (#,pred v) (bool (record-of? v D)))
+          (substrate-define (#,pred v) (bool (record-of? v D)))
           #,@(accessors specs))))
 
   (func (spec-fields [specs eqref]) -> eqref
@@ -960,13 +962,13 @@
            [field (s:car spec)]
            [get (s:cadr spec)]
            [rest (accessors (s:cdr specs))]
-           [getter #`(lisp-define (#,get v)
+           [getter #`(substrate-define (#,get v)
                        (struct.get T #,field (ref.cast (ref T) (record-arg v D '#,(name-string get)))))])
       (if (s:null? (s:cddr spec))
           (s:cons getter rest)
           (let ([set (s:caddr spec)])
             (s:cons getter
-                    (s:cons #`(lisp-define (#,set v x)
+                    (s:cons #`(substrate-define (#,set v x)
                                 (struct.set T #,field (ref.cast (ref T) (record-arg v D '#,(name-string set))) x)
                                 '#f)
                             rest))))))
@@ -1194,24 +1196,24 @@
       (scan e '() '() 0)
       (convert-expr e '()))))
 
-(define-syntax lisp-define lisp-define)
-(define-syntax lisp-lambda lisp-lambda)
-(define-syntax lisp-case-lambda lisp-case-lambda)
-(define-syntax lisp-set! lisp-set!)
+(define-syntax substrate-define substrate-define)
+(define-syntax substrate-lambda substrate-lambda)
+(define-syntax substrate-case-lambda substrate-case-lambda)
+(define-syntax substrate-set! substrate-set!)
 (define-syntax app app)
 (define-syntax datum datum)
-(define-syntax lisp-if lisp-if)
+(define-syntax substrate-if substrate-if)
 (define-syntax when when)
 (define-syntax unless unless)
 (define-syntax and and)
 (define-syntax or or)
 (define-syntax cond cond)
-(define-syntax lisp-let lisp-let)
+(define-syntax substrate-let substrate-let)
 (define-syntax letrec letrec)
 (define-syntax case case)
 (define-syntax do do)
 (define-syntax define-record-type define-record-type)
-(define-syntax lisp-define-syntax lisp-define-syntax)
+(define-syntax substrate-define-syntax substrate-define-syntax)
 (define-syntax convert convert)
 
 ;; ---- functions -------------------------------------------------------------------------
@@ -1274,12 +1276,12 @@
           (return 1))))
   0)
 
-(lisp-define (eq? a b) (bool (ref.eq a b)))
-(lisp-define (eqv? a b) (bool (eqv a b)))
-(lisp-define (equal? a b) (bool (equal a b)))
-(lisp-define (not x) (bool (ref.is_null x)))
-(lisp-define (boolean? x) (bool (i32.or (ref.is_null x) (ref.eq x '#t))))
-(lisp-define (procedure? x) (bool (ref.test (ref closure) x)))
+(substrate-define (eq? a b) (bool (ref.eq a b)))
+(substrate-define (eqv? a b) (bool (eqv a b)))
+(substrate-define (equal? a b) (bool (equal a b)))
+(substrate-define (not x) (bool (ref.is_null x)))
+(substrate-define (boolean? x) (bool (i32.or (ref.is_null x) (ref.eq x '#t))))
+(substrate-define (procedure? x) (bool (ref.test (ref closure) x)))
 
 ;; ---- pairs and lists ----
 
@@ -1291,36 +1293,36 @@
   (if (i32.eqz (s:list? l)) (drop (wrong-type who '"a list" l)))
   l)
 
-(lisp-define (cons a d) (s:cons a d))
-(lisp-define (car p) (s:car (pair-arg p '"car")))
-(lisp-define (cdr p) (s:cdr (pair-arg p '"cdr")))
-(lisp-define (caar p) (s:car (pair-arg (s:car (pair-arg p '"caar")) '"caar")))
-(lisp-define (cadr p) (s:car (pair-arg (s:cdr (pair-arg p '"cadr")) '"cadr")))
-(lisp-define (cdar p) (s:cdr (pair-arg (s:car (pair-arg p '"cdar")) '"cdar")))
-(lisp-define (cddr p) (s:cdr (pair-arg (s:cdr (pair-arg p '"cddr")) '"cddr")))
-(lisp-define (caddr p) (s:car (pair-arg (s:cdr (pair-arg (s:cdr (pair-arg p '"caddr")) '"caddr")) '"caddr")))
-(lisp-define (cdddr p) (s:cdr (pair-arg (s:cdr (pair-arg (s:cdr (pair-arg p '"cdddr")) '"cdddr")) '"cdddr")))
-(lisp-define (cadddr p)
+(substrate-define (cons a d) (s:cons a d))
+(substrate-define (car p) (s:car (pair-arg p '"car")))
+(substrate-define (cdr p) (s:cdr (pair-arg p '"cdr")))
+(substrate-define (caar p) (s:car (pair-arg (s:car (pair-arg p '"caar")) '"caar")))
+(substrate-define (cadr p) (s:car (pair-arg (s:cdr (pair-arg p '"cadr")) '"cadr")))
+(substrate-define (cdar p) (s:cdr (pair-arg (s:car (pair-arg p '"cdar")) '"cdar")))
+(substrate-define (cddr p) (s:cdr (pair-arg (s:cdr (pair-arg p '"cddr")) '"cddr")))
+(substrate-define (caddr p) (s:car (pair-arg (s:cdr (pair-arg (s:cdr (pair-arg p '"caddr")) '"caddr")) '"caddr")))
+(substrate-define (cdddr p) (s:cdr (pair-arg (s:cdr (pair-arg (s:cdr (pair-arg p '"cdddr")) '"cdddr")) '"cdddr")))
+(substrate-define (cadddr p)
   (s:car (pair-arg (s:cdr (pair-arg (s:cdr (pair-arg (s:cdr (pair-arg p '"cadddr")) '"cadddr")) '"cadddr")) '"cadddr")))
-(lisp-define (pair? x) (bool (s:pair? x)))
-(lisp-define (null? x) (bool (s:null? x)))
-(lisp-define (list? x) (bool (s:list? x)))
-(lisp-define (list . xs) xs)
-(lisp-define (length l) (s:fixnum (s:length (list-arg l '"length"))))
-(lisp-define (reverse l) (s:reverse (list-arg l '"reverse")))
+(substrate-define (pair? x) (bool (s:pair? x)))
+(substrate-define (null? x) (bool (s:null? x)))
+(substrate-define (list? x) (bool (s:list? x)))
+(substrate-define (list . xs) xs)
+(substrate-define (length l) (s:fixnum (s:length (list-arg l '"length"))))
+(substrate-define (reverse l) (s:reverse (list-arg l '"reverse")))
 
 ;; The lists appended; the last is shared.
 (func (append-all [ls eqref]) -> eqref
   (if (s:null? (s:cdr ls)) (return (s:car ls)))
   (s:append (list-arg (s:car ls) '"append") (append-all (s:cdr ls))))
 
-(lisp-define append
-  (lisp-case-lambda
+(substrate-define append
+  (substrate-case-lambda
     [(a b) (s:append (list-arg a '"append") b)]
     [() '()]
     [(a . rest) (append-all (s:cons a rest))]))
 
-(lisp-define (list-tail l k)
+(substrate-define (list-tail l k)
   (let ([n (count k '"list-tail")])
     (block done
       (loop next
@@ -1331,7 +1333,7 @@
         (br next)))
     l))
 
-(lisp-define (list-ref l k)
+(substrate-define (list-ref l k)
   (let ([n (count k '"list-ref")])
     (block done
       (loop next
@@ -1342,9 +1344,9 @@
         (br next)))
     (s:car l)))
 
-(lisp-define (list-copy l) (s:reverse (s:reverse (list-arg l '"list-copy"))))
+(substrate-define (list-copy l) (s:reverse (s:reverse (list-arg l '"list-copy"))))
 
-(lisp-define (last-pair l)
+(substrate-define (last-pair l)
   (set! l (pair-arg l '"last-pair"))
   (block done
     (loop next
@@ -1379,12 +1381,12 @@
       (br next)))
   '#f)
 
-(lisp-define (memq x l) (member-by x l 0))
-(lisp-define (memv x l) (member-by x l 1))
-(lisp-define (member x l) (member-by x l 2))
-(lisp-define (assq x l) (assoc-by x l 0 '"assq"))
-(lisp-define (assv x l) (assoc-by x l 1 '"assv"))
-(lisp-define (assoc x l) (assoc-by x l 2 '"assoc"))
+(substrate-define (memq x l) (member-by x l 0))
+(substrate-define (memv x l) (member-by x l 1))
+(substrate-define (member x l) (member-by x l 2))
+(substrate-define (assq x l) (assoc-by x l 0 '"assq"))
+(substrate-define (assv x l) (assoc-by x l 1 '"assv"))
+(substrate-define (assoc x l) (assoc-by x l 2 '"assoc"))
 
 ;; The cars of lists ls, or #f if one of them is empty.
 (func (cars [ls eqref]) -> eqref
@@ -1426,17 +1428,17 @@
         (br next)))
     (if collect (s:reverse acc) '#f)))
 
-(lisp-define map
-  (lisp-case-lambda
+(substrate-define map
+  (substrate-case-lambda
     [(f l) (map1 f l 1)]
     [(f l . ls) (map-lists f (s:cons l ls) 1)]))
 
-(lisp-define for-each
-  (lisp-case-lambda
+(substrate-define for-each
+  (substrate-case-lambda
     [(f l) (map1 f l 0)]
     [(f l . ls) (map-lists f (s:cons l ls) 0)]))
 
-(lisp-define (filter keep? l)
+(substrate-define (filter keep? l)
   (let ([acc '()])
     (block done
       (loop next
@@ -1447,7 +1449,7 @@
     (s:reverse acc)))
 
 ;; (f (f (f init x1) x2) x3)
-(lisp-define (fold-left f init l)
+(substrate-define (fold-left f init l)
   (block done
     (loop next
       (br-if done (i32.eqz (s:pair? l)))
@@ -1457,7 +1459,7 @@
   init)
 
 ;; (f x1 (f x2 (f x3 init)))
-(lisp-define (fold-right f init l)
+(substrate-define (fold-right f init l)
   (let ([r (s:reverse (list-arg l '"fold-right"))])
     (block done
       (loop next
@@ -1467,64 +1469,64 @@
         (br next)))
     init))
 
-(lisp-define (apply f first . more) (apply-list f (spread (s:cons first more))))
+(substrate-define (apply f first . more) (apply-list f (spread (s:cons first more))))
 
 ;; ---- numbers ----
 
-(lisp-define (number? x) (bool (i32.or (s:integer? x) (s:flonum? x))))
-(lisp-define (integer? x) (bool (s:integer? x)))
+(substrate-define (number? x) (bool (i32.or (s:integer? x) (s:flonum? x))))
+(substrate-define (integer? x) (bool (s:integer? x)))
 
-(lisp-define +
-  (lisp-case-lambda
+(substrate-define +
+  (substrate-case-lambda
     [(a b) (add a b)]
     [() '0]
     [(a) (add a '0)]
     [(a b . more) (fold-op 0 (add a b) more)]))
 
-(lisp-define -
-  (lisp-case-lambda
+(substrate-define -
+  (substrate-case-lambda
     [(a b) (sub a b)]
     [(a) (sub '0 a)]
     [(a b . more) (fold-op 1 (sub a b) more)]))
 
-(lisp-define *
-  (lisp-case-lambda
+(substrate-define *
+  (substrate-case-lambda
     [(a b) (mul a b)]
     [() '1]
     [(a) (mul a '1)]
     [(a b . more) (fold-op 2 (mul a b) more)]))
 
-(lisp-define (quotient a b) (quo a b))
-(lisp-define (remainder a b) (rem a b))
-(lisp-define (modulo a b) (floor-remainder a b))
+(substrate-define (quotient a b) (quo a b))
+(substrate-define (remainder a b) (rem a b))
+(substrate-define (modulo a b) (floor-remainder a b))
 
-(lisp-define <
-  (lisp-case-lambda
+(substrate-define <
+  (substrate-case-lambda
     [(a b) (bool (compare 0 a b))]
     [(a . more) (compare-chain 0 a more)]))
-(lisp-define >
-  (lisp-case-lambda
+(substrate-define >
+  (substrate-case-lambda
     [(a b) (bool (compare 1 a b))]
     [(a . more) (compare-chain 1 a more)]))
-(lisp-define <=
-  (lisp-case-lambda
+(substrate-define <=
+  (substrate-case-lambda
     [(a b) (bool (compare 2 a b))]
     [(a . more) (compare-chain 2 a more)]))
-(lisp-define >=
-  (lisp-case-lambda
+(substrate-define >=
+  (substrate-case-lambda
     [(a b) (bool (compare 3 a b))]
     [(a . more) (compare-chain 3 a more)]))
-(lisp-define =
-  (lisp-case-lambda
+(substrate-define =
+  (substrate-case-lambda
     [(a b) (bool (compare 4 a b))]
     [(a . more) (compare-chain 4 a more)]))
 
-(lisp-define (zero? a) (bool (i64.eqz (int-value a '"zero?"))))
-(lisp-define (positive? a) (bool (i64.gt_s (int-value a '"positive?") 0)))
-(lisp-define (negative? a) (bool (i64.lt_s (int-value a '"negative?") 0)))
-(lisp-define (even? a) (bool (i64.eqz (i64.and (int-value a '"even?") 1))))
-(lisp-define (odd? a) (bool (i64.ne (i64.and (int-value a '"odd?") 1) 0)))
-(lisp-define (abs a) (if (i64.lt_s (int-value a '"abs") 0) (sub '0 a) a))
+(substrate-define (zero? a) (bool (i64.eqz (int-value a '"zero?"))))
+(substrate-define (positive? a) (bool (i64.gt_s (int-value a '"positive?") 0)))
+(substrate-define (negative? a) (bool (i64.lt_s (int-value a '"negative?") 0)))
+(substrate-define (even? a) (bool (i64.eqz (i64.and (int-value a '"even?") 1))))
+(substrate-define (odd? a) (bool (i64.ne (i64.and (int-value a '"odd?") 1) 0)))
+(substrate-define (abs a) (if (i64.lt_s (int-value a '"abs") 0) (sub '0 a) a))
 
 (func (extreme [a eqref] [l eqref] [op i32]) -> eqref
   (drop (int-value a (if (i32.eq op 0) '"min" '"max")))
@@ -1536,34 +1538,34 @@
       (br next)))
   a)
 
-(lisp-define (min a . more) (extreme a more 0))
-(lisp-define (max a . more) (extreme a more 1))
+(substrate-define (min a . more) (extreme a more 0))
+(substrate-define (max a . more) (extreme a more 1))
 
-(lisp-define bitwise-and
-  (lisp-case-lambda
+(substrate-define bitwise-and
+  (substrate-case-lambda
     [(a b) (bitwise 3 a b)]
     [() '-1]
     [(a . more) (fold-op 3 (bitwise 3 a '-1) more)]))
-(lisp-define bitwise-ior
-  (lisp-case-lambda
+(substrate-define bitwise-ior
+  (substrate-case-lambda
     [(a b) (bitwise 4 a b)]
     [() '0]
     [(a . more) (fold-op 4 (bitwise 4 a '0) more)]))
-(lisp-define bitwise-xor
-  (lisp-case-lambda
+(substrate-define bitwise-xor
+  (substrate-case-lambda
     [(a b) (bitwise 5 a b)]
     [() '0]
     [(a . more) (fold-op 5 (bitwise 5 a '0) more)]))
-(lisp-define (bitwise-not a) (s:integer (i64.xor (int-value a '"bitwise-not") -1)))
-(lisp-define (arithmetic-shift a k) (shift a k))
+(substrate-define (bitwise-not a) (s:integer (i64.xor (int-value a '"bitwise-not") -1)))
+(substrate-define (arithmetic-shift a k) (shift a k))
 
-(lisp-define number->string
-  (lisp-case-lambda
+(substrate-define number->string
+  (substrate-case-lambda
     [(n) (number-string (int-value n '"number->string") 10)]
     [(n radix) (number-string (int-value n '"number->string") (radix-value radix '"number->string"))]))
 
-(lisp-define string->number
-  (lisp-case-lambda
+(substrate-define string->number
+  (substrate-case-lambda
     [(s) (parse-integer (string-arg s '"string->number") 10)]
     [(s radix) (parse-integer (string-arg s '"string->number") (radix-value radix '"string->number"))]))
 
@@ -1603,40 +1605,40 @@
         (br next)))
     (bool ok)))
 
-(lisp-define (char? x) (bool (s:char? x)))
-(lisp-define (char->integer c) (s:fixnum (char-arg c '"char->integer")))
-(lisp-define (integer->char n)
+(substrate-define (char? x) (bool (s:char? x)))
+(substrate-define (char->integer c) (s:fixnum (char-arg c '"char->integer")))
+(substrate-define (integer->char n)
   (let ([x (int-value n '"integer->char")])
     (if (i32.or (i64.gt_u x 1114111) (i32.and (i64.ge_u x 55296) (i64.le_u x 57343)))
         (return (wrong-type '"integer->char" '"a Unicode scalar value" n)))
     (s:integer->char (i32.wrap_i64 x))))
-(lisp-define char=?
-  (lisp-case-lambda [(a b) (bool (char-compare 4 a b))] [(a . more) (char-chain 4 a more)]))
-(lisp-define char<?
-  (lisp-case-lambda [(a b) (bool (char-compare 0 a b))] [(a . more) (char-chain 0 a more)]))
-(lisp-define char>?
-  (lisp-case-lambda [(a b) (bool (char-compare 1 a b))] [(a . more) (char-chain 1 a more)]))
-(lisp-define char<=?
-  (lisp-case-lambda [(a b) (bool (char-compare 2 a b))] [(a . more) (char-chain 2 a more)]))
-(lisp-define char>=?
-  (lisp-case-lambda [(a b) (bool (char-compare 3 a b))] [(a . more) (char-chain 3 a more)]))
+(substrate-define char=?
+  (substrate-case-lambda [(a b) (bool (char-compare 4 a b))] [(a . more) (char-chain 4 a more)]))
+(substrate-define char<?
+  (substrate-case-lambda [(a b) (bool (char-compare 0 a b))] [(a . more) (char-chain 0 a more)]))
+(substrate-define char>?
+  (substrate-case-lambda [(a b) (bool (char-compare 1 a b))] [(a . more) (char-chain 1 a more)]))
+(substrate-define char<=?
+  (substrate-case-lambda [(a b) (bool (char-compare 2 a b))] [(a . more) (char-chain 2 a more)]))
+(substrate-define char>=?
+  (substrate-case-lambda [(a b) (bool (char-compare 3 a b))] [(a . more) (char-chain 3 a more)]))
 
 (func (ascii-letter? [c i32]) -> i32
   (i32.or (i32.and (i32.ge_u c 65) (i32.le_u c 90)) (i32.and (i32.ge_u c 97) (i32.le_u c 122))))
 
-(lisp-define (char-alphabetic? c) (bool (ascii-letter? (char-arg c '"char-alphabetic?"))))
-(lisp-define (char-numeric? c)
+(substrate-define (char-alphabetic? c) (bool (ascii-letter? (char-arg c '"char-alphabetic?"))))
+(substrate-define (char-numeric? c)
   (let ([x (char-arg c '"char-numeric?")]) (bool (i32.and (i32.ge_u x 48) (i32.le_u x 57)))))
-(lisp-define (char-whitespace? c)
+(substrate-define (char-whitespace? c)
   (let ([x (char-arg c '"char-whitespace?")])
     (bool (i32.or (i32.eq x 32) (i32.and (i32.ge_u x 9) (i32.le_u x 13))))))
-(lisp-define (char-upcase c)
+(substrate-define (char-upcase c)
   (let ([x (char-arg c '"char-upcase")])
     (if (i32.and (i32.ge_u x 97) (i32.le_u x 122)) (s:integer->char (i32.sub x 32)) c)))
-(lisp-define (char-downcase c)
+(substrate-define (char-downcase c)
   (let ([x (char-arg c '"char-downcase")])
     (if (i32.and (i32.ge_u x 65) (i32.le_u x 90)) (s:integer->char (i32.add x 32)) c)))
-(lisp-define (digit-value c)
+(substrate-define (digit-value c)
   (let ([x (char-arg c '"digit-value")])
     (if (i32.and (i32.ge_u x 48) (i32.le_u x 57)) (s:fixnum (i32.sub x 48)) '#f)))
 
@@ -1693,18 +1695,18 @@
         (br next)))
     (bool ok)))
 
-(lisp-define (string? x) (bool (s:string? x)))
-(lisp-define (symbol? x) (bool (s:symbol? x)))
-(lisp-define string=?
-  (lisp-case-lambda [(a b) (bool (string-compare 4 a b))] [(a . more) (string-chain 4 a more)]))
-(lisp-define string<?
-  (lisp-case-lambda [(a b) (bool (string-compare 0 a b))] [(a . more) (string-chain 0 a more)]))
-(lisp-define string>?
-  (lisp-case-lambda [(a b) (bool (string-compare 1 a b))] [(a . more) (string-chain 1 a more)]))
-(lisp-define string<=?
-  (lisp-case-lambda [(a b) (bool (string-compare 2 a b))] [(a . more) (string-chain 2 a more)]))
-(lisp-define string>=?
-  (lisp-case-lambda [(a b) (bool (string-compare 3 a b))] [(a . more) (string-chain 3 a more)]))
+(substrate-define (string? x) (bool (s:string? x)))
+(substrate-define (symbol? x) (bool (s:symbol? x)))
+(substrate-define string=?
+  (substrate-case-lambda [(a b) (bool (string-compare 4 a b))] [(a . more) (string-chain 4 a more)]))
+(substrate-define string<?
+  (substrate-case-lambda [(a b) (bool (string-compare 0 a b))] [(a . more) (string-chain 0 a more)]))
+(substrate-define string>?
+  (substrate-case-lambda [(a b) (bool (string-compare 1 a b))] [(a . more) (string-chain 1 a more)]))
+(substrate-define string<=?
+  (substrate-case-lambda [(a b) (bool (string-compare 2 a b))] [(a . more) (string-chain 2 a more)]))
+(substrate-define string>=?
+  (substrate-case-lambda [(a b) (bool (string-compare 3 a b))] [(a . more) (string-chain 3 a more)]))
 
 (func (string-append-all [acc eqref] [l eqref]) -> eqref
   (block done
@@ -1716,12 +1718,12 @@
   acc)
 
 ;; A new string, even for one argument or none.
-(lisp-define (string-append . strings) (string-append-all '"" strings))
+(substrate-define (string-append . strings) (string-append-all '"" strings))
 
-(lisp-define (symbol->string x)
+(substrate-define (symbol->string x)
   (if (i32.eqz (s:symbol? x)) (return (wrong-type '"symbol->string" '"a symbol" x)))
   (s:symbol->string x))
-(lisp-define (string->symbol x) (s:string->symbol (string-arg x '"string->symbol")))
+(substrate-define (string->symbol x) (s:string->symbol (string-arg x '"string->symbol")))
 
 (func (continuation-byte? [b i32]) -> i32 (i32.eq (i32.and b 192) 128))
 
@@ -1846,35 +1848,35 @@
         (br next)))
     b))
 
-(lisp-define (string-length s) (s:fixnum (s:string-length (string-arg s '"string-length"))))
-(lisp-define (string-byte s k)
+(substrate-define (string-length s) (s:fixnum (s:string-length (string-arg s '"string-length"))))
+(substrate-define (string-byte s k)
   (let ([x (string-arg s '"string-byte")])
     (s:fixnum (s:string-byte x (index k (s:string-length x) '"string-byte")))))
-(lisp-define (string-char s k)
+(substrate-define (string-char s k)
   (let* ([x (string-arg s '"string-char")] [i (index k (s:string-length x) '"string-char")])
     (if (i32.eqz (char-start? x i)) (return (inside-char-error '"string-char" k)))
     (s:integer->char (decode-char x i))))
-(lisp-define (char-utf8-length c) (s:fixnum (utf8-length (char-arg c '"char-utf8-length"))))
-(lisp-define (substring s start end) (substring* s start end '"substring"))
-(lisp-define string-copy
-  (lisp-case-lambda
+(substrate-define (char-utf8-length c) (s:fixnum (utf8-length (char-arg c '"char-utf8-length"))))
+(substrate-define (substring s start end) (substring* s start end '"substring"))
+(substrate-define string-copy
+  (substrate-case-lambda
     [(s) (substring* s '#f '#f '"string-copy")]
     [(s start) (substring* s start '#f '"string-copy")]
     [(s start end) (substring* s start end '"string-copy")]))
-(lisp-define string->list
-  (lisp-case-lambda
+(substrate-define string->list
+  (substrate-case-lambda
     [(s) (string->list* s '#f '#f '"string->list")]
     [(s start) (string->list* s start '#f '"string->list")]
     [(s start end) (string->list* s start end '"string->list")]))
-(lisp-define (list->string chars) (list->string* chars '"list->string"))
-(lisp-define (string . chars) (list->string* chars '"string"))
-(lisp-define utf8->string
-  (lisp-case-lambda
+(substrate-define (list->string chars) (list->string* chars '"list->string"))
+(substrate-define (string . chars) (list->string* chars '"string"))
+(substrate-define utf8->string
+  (substrate-case-lambda
     [(v) (utf8->string* v '#f '#f '"utf8->string")]
     [(v start) (utf8->string* v start '#f '"utf8->string")]
     [(v start end) (utf8->string* v start end '"utf8->string")]))
-(lisp-define string->utf8
-  (lisp-case-lambda
+(substrate-define string->utf8
+  (substrate-case-lambda
     [(s) (string->utf8* s '#f '#f '"string->utf8")]
     [(s start) (string->utf8* s start '#f '"string->utf8")]
     [(s start end) (string->utf8* s start end '"string->utf8")]))
@@ -1916,21 +1918,21 @@
     (array.copy vector vector r 0 a start (i32.sub end start))
     r))
 
-(lisp-define (vector? x) (bool (ref.test (ref vector) x)))
-(lisp-define (vector . xs) (list->vector* xs '"vector"))
-(lisp-define make-vector
-  (lisp-case-lambda
+(substrate-define (vector? x) (bool (ref.test (ref vector) x)))
+(substrate-define (vector . xs) (list->vector* xs '"vector"))
+(substrate-define make-vector
+  (substrate-case-lambda
     [(n) (array.new vector '#f (count n '"make-vector"))]
     [(n fill) (array.new vector fill (count n '"make-vector"))]))
-(lisp-define (vector-length v) (s:fixnum (array.len (vector-arg v '"vector-length"))))
-(lisp-define (vector-ref v k)
+(substrate-define (vector-length v) (s:fixnum (array.len (vector-arg v '"vector-length"))))
+(substrate-define (vector-ref v k)
   (let ([a (vector-arg v '"vector-ref")])
     (array.get vector a (index k (array.len a) '"vector-ref"))))
-(lisp-define (vector-set! v k x)
+(substrate-define (vector-set! v k x)
   (let ([a (vector-arg v '"vector-set!")])
     (array.set vector a (index k (array.len a) '"vector-set!") x)
     '#f))
-(lisp-define (vector->list v)
+(substrate-define (vector->list v)
   (let* ([a (vector-arg v '"vector->list")] [i (array.len a)] [l '()])
     (block done
       (loop next
@@ -1939,13 +1941,13 @@
         (set! l (s:cons (array.get vector a i) l))
         (br next)))
     l))
-(lisp-define (list->vector l) (list->vector* l '"list->vector"))
-(lisp-define (vector-fill! v x)
+(substrate-define (list->vector l) (list->vector* l '"list->vector"))
+(substrate-define (vector-fill! v x)
   (let ([a (vector-arg v '"vector-fill!")])
     (array.fill vector a 0 x (array.len a))
     '#f))
-(lisp-define vector-copy
-  (lisp-case-lambda
+(substrate-define vector-copy
+  (substrate-case-lambda
     [(v) (vector-copy* v '#f '#f '"vector-copy")]
     [(v start) (vector-copy* v start '#f '"vector-copy")]
     [(v start end) (vector-copy* v start end '"vector-copy")]))
@@ -2000,8 +2002,8 @@
         (br next)))
     r))
 
-(lisp-define (bytevector? x) (bool (ref.test (ref bytevector) x)))
-(lisp-define (bytevector . bytes)
+(substrate-define (bytevector? x) (bool (ref.test (ref bytevector) x)))
+(substrate-define (bytevector . bytes)
   (let* ([n (s:length bytes)] [r (array.new bytevector 0 n)] [i 0])
     (block done
       (loop next
@@ -2011,29 +2013,29 @@
         (set! i (i32.add i 1))
         (br next)))
     r))
-(lisp-define make-bytevector
-  (lisp-case-lambda
+(substrate-define make-bytevector
+  (substrate-case-lambda
     [(n) (array.new bytevector 0 (count n '"make-bytevector"))]
     [(n fill) (array.new bytevector (byte-arg fill '"make-bytevector") (count n '"make-bytevector"))]))
-(lisp-define (bytevector-length v) (s:fixnum (array.len (bytevector-arg v '"bytevector-length"))))
-(lisp-define (bytevector-u8-ref v k)
+(substrate-define (bytevector-length v) (s:fixnum (array.len (bytevector-arg v '"bytevector-length"))))
+(substrate-define (bytevector-u8-ref v k)
   (let ([a (bytevector-arg v '"bytevector-u8-ref")])
     (s:fixnum (array.get_u bytevector a (index k (array.len a) '"bytevector-u8-ref")))))
-(lisp-define (bytevector-u8-set! v k b)
+(substrate-define (bytevector-u8-set! v k b)
   (let ([a (bytevector-arg v '"bytevector-u8-set!")])
     (array.set bytevector a (index k (array.len a) '"bytevector-u8-set!") (byte-arg b '"bytevector-u8-set!"))
     '#f))
-(lisp-define bytevector-copy
-  (lisp-case-lambda
+(substrate-define bytevector-copy
+  (substrate-case-lambda
     [(v) (bytevector-copy* v '#f '#f '"bytevector-copy")]
     [(v start) (bytevector-copy* v start '#f '"bytevector-copy")]
     [(v start end) (bytevector-copy* v start end '"bytevector-copy")]))
-(lisp-define bytevector-copy!
-  (lisp-case-lambda
+(substrate-define bytevector-copy!
+  (substrate-case-lambda
     [(to at from) (bytevector-copy!* to at from '#f '#f)]
     [(to at from start) (bytevector-copy!* to at from start '#f)]
     [(to at from start end) (bytevector-copy!* to at from start end)]))
-(lisp-define (bytevector-append . vs) (bytevector-append-all vs))
+(substrate-define (bytevector-append . vs) (bytevector-append-all vs))
 
 ;; ---- records ----
 ;;
@@ -2232,22 +2234,22 @@
         (br next)))
     acc))
 
-(lisp-define (make-eq-hashtable) (make-table 0))
-(lisp-define (make-eqv-hashtable) (make-table 1))
-(lisp-define (make-equal-hashtable) (make-table 2))
-(lisp-define (hashtable? x) (bool (ref.test (ref hashtable) x)))
-(lisp-define (hashtable-count t) (s:fixnum (struct.get hashtable count (table-arg t '"hashtable-count"))))
+(substrate-define (make-eq-hashtable) (make-table 0))
+(substrate-define (make-eqv-hashtable) (make-table 1))
+(substrate-define (make-equal-hashtable) (make-table 2))
+(substrate-define (hashtable? x) (bool (ref.test (ref hashtable) x)))
+(substrate-define (hashtable-count t) (s:fixnum (struct.get hashtable count (table-arg t '"hashtable-count"))))
 
-(lisp-define (hashtable-ref t k default)
+(substrate-define (hashtable-ref t k default)
   (let* ([x (table-arg t '"hashtable-ref")]
          [e (find-entry x k (key-hash k (struct.get hashtable kind x) '"hashtable-ref"))])
     (if (ref.is_null e) default (struct.get entry value e))))
 
-(lisp-define (hashtable-contains? t k)
+(substrate-define (hashtable-contains? t k)
   (let ([x (table-arg t '"hashtable-contains?")])
     (bool (i32.eqz (ref.is_null (find-entry x k (key-hash k (struct.get hashtable kind x) '"hashtable-contains?")))))))
 
-(lisp-define (hashtable-set! t k v)
+(substrate-define (hashtable-set! t k v)
   (let* ([x (table-arg t '"hashtable-set!")]
          [h (key-hash k (struct.get hashtable kind x) '"hashtable-set!")]
          [e (find-entry x k h)])
@@ -2256,7 +2258,7 @@
 
 ;; Set k's value to (update value), value being k's value or default. update
 ;; may change the table.
-(lisp-define (hashtable-update! t k update default)
+(substrate-define (hashtable-update! t k update default)
   (let* ([x (table-arg t '"hashtable-update!")]
          [h (key-hash k (struct.get hashtable kind x) '"hashtable-update!")]
          [e (find-entry x k h)]
@@ -2265,65 +2267,65 @@
     (if (ref.is_null e) (add-entry x k h v) (struct.set entry value e v))
     '#f))
 
-(lisp-define (hashtable-delete! t k)
+(substrate-define (hashtable-delete! t k)
   (let ([x (table-arg t '"hashtable-delete!")])
     (remove-entry x k (key-hash k (struct.get hashtable kind x) '"hashtable-delete!"))
     '#f))
 
-(lisp-define (hashtable-clear! t)
+(substrate-define (hashtable-clear! t)
   (let ([x (table-arg t '"hashtable-clear!")])
     (struct.set hashtable buckets x (array.new buckets (ref.null entry) 16))
     (struct.set hashtable count x 0)
     '#f))
 
-(lisp-define (hashtable-keys t) (list->vector* (table-walk (table-arg t '"hashtable-keys") 0) '"hashtable-keys"))
-(lisp-define (hashtable-values t) (list->vector* (table-walk (table-arg t '"hashtable-values") 1) '"hashtable-values"))
-(lisp-define (hashtable->alist t) (table-walk (table-arg t '"hashtable->alist") 2))
+(substrate-define (hashtable-keys t) (list->vector* (table-walk (table-arg t '"hashtable-keys") 0) '"hashtable-keys"))
+(substrate-define (hashtable-values t) (list->vector* (table-walk (table-arg t '"hashtable-values") 1) '"hashtable-values"))
+(substrate-define (hashtable->alist t) (table-walk (table-arg t '"hashtable->alist") 2))
 
 ;; ---- syntax ----
 ;;
-;; The syntax library's functions (spec 2.3) as Lisp functions, for macros
-;; written in the Lisp: predicates give #t or #f.
+;; The syntax library's functions (spec 2.3) as Substrate functions, for
+;; macros written in Substrate: predicates give #t or #f.
 
 (func (syntax-arg [x eqref] [who eqref]) -> eqref
   (if (i32.eqz (s:syntax? x)) (drop (wrong-type who '"a syntax object" x)))
   x)
 
-(lisp-define (syntax? x) (bool (s:syntax? x)))
-(lisp-define (identifier? x) (bool (s:identifier? x)))
-(lisp-define (syntax-e x) (s:syntax-e (syntax-arg x '"syntax-e")))
-(lisp-define (syntax->list x) (s:syntax->list x))
-(lisp-define (syntax->datum x) (s:syntax->datum x))
-(lisp-define datum->syntax
-  (lisp-case-lambda
+(substrate-define (syntax? x) (bool (s:syntax? x)))
+(substrate-define (identifier? x) (bool (s:identifier? x)))
+(substrate-define (syntax-e x) (s:syntax-e (syntax-arg x '"syntax-e")))
+(substrate-define (syntax->list x) (s:syntax->list x))
+(substrate-define (syntax->datum x) (s:syntax->datum x))
+(substrate-define datum->syntax
+  (substrate-case-lambda
     [(ctx d) (s:datum->syntax ctx d '#f)]
     [(ctx d loc) (s:datum->syntax ctx d loc)]))
-(lisp-define (syntax-rewrap x e) (s:syntax-rewrap (syntax-arg x '"syntax-rewrap") e))
+(substrate-define (syntax-rewrap x e) (s:syntax-rewrap (syntax-arg x '"syntax-rewrap") e))
 ;; As in Racket, (syntax-property x key) reads a property, and
 ;; (syntax-property x key value) returns a copy of x with it set.
-(lisp-define syntax-property
-  (lisp-case-lambda
+(substrate-define syntax-property
+  (substrate-case-lambda
     [(x key) (s:syntax-property (syntax-arg x '"syntax-property") key)]
     [(x key value) (s:syntax-property-set (syntax-arg x '"syntax-property") key value)]))
-(lisp-define (free-identifier=? a b) (bool (s:free-identifier=? a b)))
-(lisp-define (syntax-local-value id) (s:syntax-local-value id))
-(lisp-define (identifier-binding-kind id) (s:identifier-binding-kind id))
-(lisp-define (local-expand x) (s:local-expand x))
-(lisp-define (syntax-local-lift-definition form) (s:syntax-local-lift-definition form))
-(lisp-define raise-syntax-error
-  (lisp-case-lambda
+(substrate-define (free-identifier=? a b) (bool (s:free-identifier=? a b)))
+(substrate-define (syntax-local-value id) (s:syntax-local-value id))
+(substrate-define (identifier-binding-kind id) (s:identifier-binding-kind id))
+(substrate-define (local-expand x) (s:local-expand x))
+(substrate-define (syntax-local-lift-definition form) (s:syntax-local-lift-definition form))
+(substrate-define raise-syntax-error
+  (substrate-case-lambda
     [(name message) (s:raise-syntax-error name message '#f) '#f]
     [(name message x) (s:raise-syntax-error name message x) '#f]))
 
 ;; ---- output and errors ----
 
-(lisp-define (write x) (out-datum x 0) (flush-out) '#f)
-(lisp-define (display x) (out-datum x 1) (flush-out) '#f)
-(lisp-define (newline) (out-byte 10) (flush-out) '#f)
+(substrate-define (write x) (out-datum x 0) (flush-out) '#f)
+(substrate-define (display x) (out-datum x 1) (flush-out) '#f)
+(substrate-define (newline) (out-byte 10) (flush-out) '#f)
 
 ;; (error message irritant ...): abort with message, displayed, then each
 ;; irritant, written.
-(lisp-define (error message . irritants)
+(substrate-define (error message . irritants)
   (set! out-length 0)
   (out-datum message 1)
   (block done

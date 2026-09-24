@@ -1,6 +1,6 @@
-;; Strings in the dynamic Lisp (lib/lisp.sub) are immutable UTF-8,
+;; Strings in Substrate (lib/substrate.sub) are immutable UTF-8,
 ;; indexed by byte: "aλb€c😀" is 12 bytes, and λ starts at byte 1.
-(require-unqualified l "../lib/lisp.sub")
+(require-unqualified substrate "../lib/substrate.sub")
 
 (define (run)
   (let ([s "aλb€c😀"])
