@@ -1,67 +1,9 @@
-;; Lifecycle: permanent library: Substrate, the language most code is
-;; written in, defined on the Substrate kernel (the dynamic language of the
-;; seed plan). The compiler will be written in it, and it grows as the
-;; compiler needs.
-;;
-;; Values are the syntax library's data (spec 2.2) plus closures, vectors,
-;; byte strings, structs, hash tables and boxes. Every value is an eqref,
-;; and #f is the only false value. A module written in Substrate takes its
-;; forms with require-unqualified:
-;;
-;;   (define (f x ...) body ...)   a known function (below)
-;;   (define (f x ... . rest) body ...)
-;;                                  a function whose rest is a list of the
-;;                                  arguments after the x ..., bound to a
-;;                                  closure
-;;   (define f (lambda (x ...) ...)) a known function too
-;;   (define f (case-lambda ...))   a known function running its first
-;;                                  clause with fixed parameters, if it has
-;;                                  one, whose value is the case-lambda
-;;   (define f (lambda ...)), (define f (case-lambda ...))
-;;                                  otherwise, a function bound to a closure
-;;   (define (f x ...) #:inline body ...), (define f #:inline e)
-;;                                  a known function that is inline (spec
-;;                                  5.2): its body is compiled into each
-;;                                  direct call of it
-;;   (define x e)                   a variable
-;;   (lambda params body ...)       a closure, with params (x ...),
-;;                                  (x ... . rest) or rest
-;;   (case-lambda [params body ...] ...)
-;;                                  a closure that runs the first clause
-;;                                  taking the arguments it is given
-;;   (set! x e)                     assign x; the value is #f
-;;   (f arg ...)                    a call: of a closure, or of a kernel
-;;                                  function, such as a known function,
-;;                                  which is called directly if it takes
-;;                                  that many arguments
-;;   if, cond (with else), case (with else), when, unless, and, or, let
-;;   (also named let), letrec, do; quasiquote and let* are the kernel's;
-;;   literals are values, so 42 is a fixnum
-;;   (struct name (field ...) option ...)
-;;                                  a struct: the constructor name,
-;;                                  the predicate name?, an accessor
-;;                                  name-field per field, and a mutator
-;;                                  set-name-field! per mutable field; a
-;;                                  field is id or [id #:mutable], and
-;;                                  the option #:mutable makes them all
-;;                                  mutable
-;;   (define-syntax (name stx) body ...), (define-syntax name expr)
-;;                                  a macro, if the value is a procedure,
-;;                                  which becomes its transformer; the
-;;                                  module must also take Substrate at
-;;                                  phase 1
-;;   #%linklet                      the hook that lowers every lambda
-;;                                  (spec 6.5)
-;;
-;; and the functions the provide below lists, grouped as they are defined
-;; at the end. A function given an argument of the wrong type, or the wrong
-;; number of arguments, stops with an error that names it. Characters are
-;; classified and cased as ASCII. Strings are UTF-8, indexed by byte; the
-;; functions that take byte indexes say UTF-8 in their names.
-;;
-;; Integers are exact up to 64 bits; arithmetic beyond that is an error.
-;; A program's entry point is its function main: (define (main) ...), or a
-;; kernel (func (main) ...).
+;; Lifecycle: permanent library: the core of Substrate (lib/substrate.sub),
+;; what Substrate's own code cannot define, in kernel code: its values and
+;; calls, closures and their conversion (#%linklet), the forms define,
+;; lambda, case-lambda, set!, #%app, #%datum, if, let, letrec, struct and
+;; define-syntax, and the functions that work on the wasm representation of
+;; values. lib/substrate.sub is written in Substrate on it.
 ;;
 ;; Closures. Every function is a closure: a struct of type closure, whose
 ;; first field is its code. All code has one type, code: it takes the
@@ -97,18 +39,16 @@
 ;; Substrate provides Substrate's #%linklet, or its own that runs it.
 
 (require s syntax)
-(require mt "match.sub" else)
 
 (provide [define substrate-define] [lambda substrate-lambda] [case-lambda substrate-case-lambda]
          [set! substrate-set!] [#%app app] [#%datum datum]
-         [if substrate-if] cond else when unless and or [let substrate-let] letrec case do
+         [if substrate-if] [let substrate-let] letrec
          [struct substrate-struct] [define-syntax substrate-define-syntax] #%linklet
          ;; equivalence and predicates
          eq? eqv? equal? not boolean? procedure?
          ;; pairs and lists
          cons car cdr caar cadr cdar cddr caddr cdddr cadddr pair? null? list? list length
-         reverse append list-tail list-ref last-pair memq memv member assq assv assoc
-         map for-each andmap ormap filter foldl foldr apply take [drop list-drop] last findf range sort
+         reverse append apply
          ;; numbers
          number? integer? fixnum? + - * quotient remainder modulo < > <= >= = zero? positive?
          negative? even? odd? abs min max bitwise-and bitwise-ior bitwise-xor bitwise-not
@@ -1513,36 +1453,6 @@
             #,(if (i32.eq (s:length parts) 4) (s:car (s:cdddr parts)) #''#f)
             #,(s:caddr parts))))
 
-  (func (when [stx eqref]) -> eqref
-    (let ([parts (s:syntax->list stx)])
-      #`(substrate-if #,(s:cadr parts) (begin #,@(s:cddr parts)))))
-
-  (func (unless [stx eqref]) -> eqref
-    (let ([parts (s:syntax->list stx)])
-      #`(substrate-if #,(s:cadr parts) '#f (begin #,@(s:cddr parts)))))
-
-  (func (and [stx eqref]) -> eqref
-    (let ([args (s:cdr (s:syntax->list stx))])
-      (if (s:null? args) (return #''#t))
-      (if (s:null? (s:cdr args)) (return (s:car args)))
-      #`(substrate-if #,(s:car args) (and #,@(s:cdr args)) '#f)))
-
-  (func (or [stx eqref]) -> eqref
-    (let ([args (s:cdr (s:syntax->list stx))])
-      (if (s:null? args) (return #''#f))
-      (if (s:null? (s:cdr args)) (return (s:car args)))
-      #`(let ([t #,(s:car args)]) (substrate-if t t (or #,@(s:cdr args))))))
-
-  ;; (cond [test body ...] ... [else body ...])
-  (func (cond [stx eqref]) -> eqref
-    (let ([clauses (s:cdr (s:syntax->list stx))])
-      (if (s:null? clauses) (return #''#f))
-      (let ([c (s:syntax->list (s:car clauses))])
-        (if (s:identifier? (s:car c))
-            (if (s:free-identifier=? (s:car c) #'else)
-                (return #`(begin #,@(s:cdr c)))))
-        #`(substrate-if #,(s:car c) (begin #,@(s:cdr c)) (cond #,@(s:cdr clauses))))))
-
   (func (binding-names [bs eqref]) -> eqref
     (if (s:null? bs) '() (s:cons (s:car (s:syntax->list (s:car bs))) (binding-names (s:cdr bs)))))
 
@@ -1573,61 +1483,6 @@
       #`(let (#,@(false-bindings (binding-names bs)))
           #,@(assignments bs)
           (let () #,@(s:cddr parts)))))
-
-  ;; (case key [(datum ...) body ...] ... [else body ...]): the first clause
-  ;; with a datum equal? to key. A clause whose datums equal? compares as
-  ;; references is tested with eq?.
-  (func (case [stx eqref]) -> eqref
-    (let ([parts (s:syntax->list stx)])
-      #`(let ([k #,(s:cadr parts)]) (cond #,@(case-clauses (s:cddr parts))))))
-
-  (func (case-clauses [cs eqref]) -> eqref
-    (if (s:null? cs) (return '()))
-    (let ([c (s:syntax->list (s:car cs))])
-      (if (ref.is_null c) (s:raise-syntax-error 'case '"expected a clause: [(datum ...) body ...]" (s:car cs)))
-      (s:cons (if (if (s:identifier? (s:car c)) (s:free-identifier=? (s:car c) #'else) 0)
-                  #`[else #,@(s:cdr c)]
-                  (if (eq-datums? (s:syntax->datum (s:car c)))
-                      #`[(member-by k '#,(s:car c) 0) #,@(s:cdr c)]
-                      #`[(member-by k '#,(s:car c) 2) #,@(s:cdr c)]))
-              (case-clauses (s:cdr cs)))))
-
-  ;; Whether ds is a list of datums that equal? compares as references:
-  ;; symbols and keywords, which are interned, fixnums, booleans and ().
-  (func (eq-datums? [ds eqref]) -> i32
-    (block done
-      (loop next
-        (br-if done (i32.eqz (s:pair? ds)))
-        (let ([d (s:car ds)])
-          (if (i32.eqz (i32.or (i32.or (s:symbol? d) (s:keyword? d))
-                               (i32.or (s:fixnum? d) (i32.or (s:boolean? d) (s:null? d)))))
-              (return 0)))
-        (set! ds (s:cdr ds))
-        (br next)))
-    (s:null? ds))
-
-  ;; (do ([x init step] ...) (test result ...) body ...): a loop. A variable
-  ;; without a step keeps its value.
-  (func (do [stx eqref]) -> eqref
-    (let* ([parts (s:syntax->list stx)]
-           [specs (s:syntax->list (s:cadr parts))]
-           [end (s:syntax->list (s:caddr parts))])
-      #`(substrate-let loop (#,@(do-inits specs))
-          (substrate-if #,(s:car end)
-                   (begin '#f #,@(s:cdr end))
-                   (begin #,@(s:cdddr parts) (app loop #,@(do-steps specs)))))))
-
-  (func (do-inits [specs eqref]) -> eqref
-    (if (s:null? specs)
-        '()
-        (let ([spec (s:syntax->list (s:car specs))])
-          (s:cons #`[#,(s:car spec) #,(s:cadr spec)] (do-inits (s:cdr specs))))))
-
-  (func (do-steps [specs eqref]) -> eqref
-    (if (s:null? specs)
-        '()
-        (let ([spec (s:syntax->list (s:car specs))])
-          (s:cons (if (s:null? (s:cddr spec)) (s:car spec) (s:caddr spec)) (do-steps (s:cdr specs))))))
 
   ;; (define-syntax (name stx) body ...) is (define-syntax name (lambda (stx)
   ;; body ...)), with lambda taken from where the form was written, so that
@@ -2052,15 +1907,8 @@
 (define-syntax app app)
 (define-syntax datum datum)
 (define-syntax substrate-if substrate-if)
-(define-syntax when when)
-(define-syntax unless unless)
-(define-syntax and and)
-(define-syntax or or)
-(define-syntax cond cond)
 (define-syntax substrate-let substrate-let)
 (define-syntax letrec letrec)
-(define-syntax case case)
-(define-syntax do do)
 (define-syntax substrate-struct substrate-struct)
 (define-syntax substrate-define-syntax substrate-define-syntax)
 (define-syntax #%linklet substrate-linklet)
@@ -2176,259 +2024,11 @@
     [() '()]
     [(a . rest) (append-all (s:cons a rest))]))
 
-(substrate-define (list-tail l k)
-  (let ([n (count k '"list-tail")])
-    (block done
-      (loop next
-        (br-if done (i32.eqz n))
-        (if (i32.eqz (s:pair? l)) (return (index-error '"list-tail" k)))
-        (set! l (s:cdr l))
-        (set! n (i32.sub n 1))
-        (br next)))
-    l))
-
-(substrate-define (list-ref l k)
-  (let ([n (count k '"list-ref")])
-    (block done
-      (loop next
-        (if (i32.eqz (s:pair? l)) (return (index-error '"list-ref" k)))
-        (br-if done (i32.eqz n))
-        (set! l (s:cdr l))
-        (set! n (i32.sub n 1))
-        (br next)))
-    (s:car l)))
-
-
-(substrate-define (last-pair l)
-  (set! l (pair-arg l '"last-pair"))
-  (block done
-    (loop next
-      (br-if done (i32.eqz (s:pair? (s:cdr l))))
-      (set! l (s:cdr l))
-      (br next)))
-  l)
-
-;; The first n elements of l, and l after them; the caller checks that l
-;; has n.
-(func (take* [l eqref] [n i32]) -> eqref
-  (let ([acc '()])
-    (block done
-      (loop next
-        (br-if done (i32.eqz n))
-        (set! acc (s:cons (s:car l) acc))
-        (set! l (s:cdr l))
-        (set! n (i32.sub n 1))
-        (br next)))
-    (s:reverse acc)))
-
-(func (drop* [l eqref] [n i32]) -> eqref
-  (block done
-    (loop next
-      (br-if done (i32.eqz n))
-      (set! l (s:cdr l))
-      (set! n (i32.sub n 1))
-      (br next)))
-  l)
-
-;; Check that l has k elements, for function who; k as an i32.
-(func (prefix-count [l eqref] [k eqref] [who eqref]) -> i32
-  (let ([n (count k who)] [i 0] [p l])
-    (block done
-      (loop next
-        (br-if done (i32.ge_u i n))
-        (if (i32.eqz (s:pair? p)) (drop (index-error who k)))
-        (set! p (s:cdr p))
-        (set! i (i32.add i 1))
-        (br next)))
-    n))
-
-;; The first k elements of l, and l without them.
-(substrate-define (take l k) (take* l (prefix-count l k '"take")))
-;; Provided as drop: the kernel's drop, the wasm instruction, is used here.
-(substrate-define (list-drop l k) (drop* l (prefix-count l k '"drop")))
-
-;; The last element of l.
-(substrate-define (last l)
-  (set! l (pair-arg l '"last"))
-  (block done
-    (loop next
-      (br-if done (i32.eqz (s:pair? (s:cdr l))))
-      (set! l (s:cdr l))
-      (br next)))
-  (s:car l))
-
-;; The first element of l that f is true of, or #f.
-(substrate-define (findf f l)
-  (let ([p (list-arg l '"findf")])
-    (block done
-      (loop next
-        (br-if done (i32.eqz (s:pair? p)))
-        (if (i32.eqz (ref.is_null (app f (s:car p)))) (return (s:car p)))
-        (set! p (s:cdr p))
-        (br next)))
-    '#f))
-
-;; (range end) or (range start end): the integers from start, or 0, up to
-;; but not including end.
-(func (range* [start i32] [end i32]) -> eqref
-  (let ([acc '()] [i end])
-    (block done
-      (loop next
-        (br-if done (i32.le_s i start))
-        (set! i (i32.sub i 1))
-        (set! acc (s:cons (s:fixnum i) acc))
-        (br next)))
-    acc))
-
-(substrate-define range
-  (substrate-case-lambda
-    [(end) (range* 0 (count end '"range"))]
-    [(start end) (range* (count start '"range") (count end '"range"))]))
-
-;; l sorted by less?, keeping the order of elements neither is less than
-;; the other: a stable sort.
-(substrate-define (sort l less?) (merge-sort (list-arg l '"sort") (s:length l) less?))
-
-(func (merge-sort [l eqref] [n i32] [less? eqref]) -> eqref
-  (if (i32.le_u n 1) (return l))
-  (let ([h (i32.shr_u n 1)])
-    (merge (merge-sort (take* l h) h less?) (merge-sort (drop* l h) (i32.sub n h) less?) less?)))
-
-;; Sorted lists a and b as one sorted list; of equal elements, a's first.
-(func (merge [a eqref] [b eqref] [less? eqref]) -> eqref
-  (let ([acc '()])
-    (block done
-      (loop next
-        (br-if done (i32.eqz (i32.and (s:pair? a) (s:pair? b))))
-        (if (ref.is_null (app less? (s:car b) (s:car a)))
-            (begin (set! acc (s:cons (s:car a) acc)) (set! a (s:cdr a)))
-            (begin (set! acc (s:cons (s:car b) acc)) (set! b (s:cdr b))))
-        (br next)))
-    ;; acc, reversed, onto what is left of a or b.
-    (let ([rest (if (s:pair? a) a b)])
-      (block done
-        (loop next
-          (br-if done (i32.eqz (s:pair? acc)))
-          (set! rest (s:cons (s:car acc) rest))
-          (set! acc (s:cdr acc))
-          (br next)))
-      rest)))
-
-;; The first tail of l whose car matches x: by ref.eq (0), eqv? (1) or
-;; equal? (2).
-(func (member-by [x eqref] [l eqref] [by i32]) -> eqref
-  (block done
-    (loop next
-      (br-if done (i32.eqz (s:pair? l)))
-      (if (same x (s:car l) by) (return l))
-      (set! l (s:cdr l))
-      (br next)))
-  '#f)
-
+;; Whether a and b match: by ref.eq (by 0), eqv? (1) or equal? (2).
 (func (same [a eqref] [b eqref] [by i32]) -> i32
   (if (i32.eqz by) (return (ref.eq a b)))
   (if (i32.eq by 1) (return (eqv a b)))
   (equal a b))
-
-;; The first pair in alist l whose car matches x, as member-by does.
-(func (assoc-by [x eqref] [l eqref] [by i32] [who eqref]) -> eqref
-  (block done
-    (loop next
-      (br-if done (i32.eqz (s:pair? l)))
-      (if (same x (s:car (pair-arg (s:car l) who)) by) (return (s:car l)))
-      (set! l (s:cdr l))
-      (br next)))
-  '#f)
-
-(substrate-define (memq x l) (member-by x l 0))
-(substrate-define (memv x l) (member-by x l 1))
-(substrate-define (member x l) (member-by x l 2))
-(substrate-define (assq x l) (assoc-by x l 0 '"assq"))
-(substrate-define (assv x l) (assoc-by x l 1 '"assv"))
-(substrate-define (assoc x l) (assoc-by x l 2 '"assoc"))
-
-;; The length of lists ls, which must be proper lists of one length, for
-;; function who.
-(func (lists-length [ls eqref] [who eqref]) -> i32
-  (let ([n -1] [k 0])
-    (block done
-      (loop next
-        (br-if done (i32.eqz (s:pair? ls)))
-        (set! k (s:length (list-arg (s:car ls) who)))
-        (if (i32.eq n -1)
-            (set! n k)
-            (if (i32.ne n k) (drop (same-size-error who))))
-        (set! ls (s:cdr ls))
-        (br next)))
-    n))
-
-(func (same-size-error [who eqref]) -> eqref
-  (let ([p (new-port -1)])
-    (out-who p who)
-    (out-string p '": all lists must have the same size" 0)
-    (fail-with p)))
-
-(func (cars [ls eqref]) -> eqref
-  (if (s:null? ls) '() (s:cons (s:car (s:car ls)) (cars (s:cdr ls)))))
-
-(func (cdrs [ls eqref]) -> eqref
-  (if (s:null? ls) '() (s:cons (s:cdr (s:car ls)) (cdrs (s:cdr ls)))))
-
-;; f applied to the elements of lists ls in order: their results as a list
-;; (mode 0: map), nothing (1: for-each), whether all are true (2: andmap)
-;; or the first true one (3: ormap).
-(func (map-lists [f eqref] [ls eqref] [mode i32] [who eqref]) -> eqref
-  (let ([n (lists-length ls who)] [acc '()] [r eqref (if (i32.eq mode 3) '#f '#t)] [i 0])
-    (block done
-      (loop next
-        (br-if done (i32.ge_u i n))
-        (set! r (if (s:null? (s:cdr ls)) (app f (s:car (s:car ls))) (apply-list f (cars ls))))
-        (if (i32.eqz mode) (set! acc (s:cons r acc)))
-        (if (i32.eq mode 2) (if (ref.is_null r) (return '#f)))
-        (if (i32.eq mode 3) (if (i32.eqz (ref.is_null r)) (return r)))
-        (set! ls (cdrs ls))
-        (set! i (i32.add i 1))
-        (br next)))
-    (if (i32.eqz mode) (return (s:reverse acc)))
-    (if (i32.eq mode 1) (return '#f))
-    r))
-
-(substrate-define (map f l . ls) (map-lists f (s:cons l ls) 0 '"map"))
-(substrate-define (for-each f l . ls) (map-lists f (s:cons l ls) 1 '"for-each"))
-(substrate-define (andmap f l . ls) (map-lists f (s:cons l ls) 2 '"andmap"))
-(substrate-define (ormap f l . ls) (map-lists f (s:cons l ls) 3 '"ormap"))
-
-(substrate-define (filter keep? l)
-  (let ([acc '()] [p (list-arg l '"filter")])
-    (block done
-      (loop next
-        (br-if done (i32.eqz (s:pair? p)))
-        (if (i32.eqz (ref.is_null (app keep? (s:car p)))) (set! acc (s:cons (s:car p) acc)))
-        (set! p (s:cdr p))
-        (br next)))
-    (s:reverse acc)))
-
-;; f is called with an element of each list, then the value so far, from
-;; the left (foldl) or the right (foldr).
-(func (fold-lists [f eqref] [init eqref] [ls eqref] [right i32] [who eqref]) -> eqref
-  (let ([n (lists-length ls who)] [i 0])
-    (if right (set! ls (reverse-each ls)))
-    (block done
-      (loop next
-        (br-if done (i32.ge_u i n))
-        (set! init (if (s:null? (s:cdr ls))
-                       (app f (s:car (s:car ls)) init)
-                       (apply-list f (s:append (cars ls) (s:cons init '())))))
-        (set! ls (cdrs ls))
-        (set! i (i32.add i 1))
-        (br next)))
-    init))
-
-(func (reverse-each [ls eqref]) -> eqref
-  (if (s:null? ls) '() (s:cons (s:reverse (s:car ls)) (reverse-each (s:cdr ls)))))
-
-(substrate-define (foldl f init l . ls) (fold-lists f init (s:cons l ls) 0 '"foldl"))
-(substrate-define (foldr f init l . ls) (fold-lists f init (s:cons l ls) 1 '"foldr"))
 
 (substrate-define (apply f first . more) (apply-list f (spread (s:cons first more))))
 
