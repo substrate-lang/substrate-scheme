@@ -1,9 +1,14 @@
-;; Lifecycle: permanent library: the core of Substrate (lib/substrate.sub),
-;; what Substrate's own code cannot define, in kernel code: its values and
-;; calls, the forms define, lambda, case-lambda, set!, #%app, #%datum, if,
-;; let, letrec, struct and define-syntax, and the functions that work on
-;; the wasm representation of values. lib/substrate.sub is written in
-;; Substrate on it.
+;; Lifecycle: experimental. The core of Substrate as the new compiler
+;; builds it (next/substrate): lib/substrate-core.sub, but that its values
+;; are data.sub's, not the kernel module's, which is the compiler's and
+;; keeps its data in memory; its transformers are kernel code on the
+;; kernel module's data; and Substrate code does not run at compile time.
+;; So here is no define-syntax whose transformer is Substrate code
+;; (substrate.sub's defines macros by patterns), and there are no syntax
+;; functions, as Substrate's values have no syntax. The run-time
+;; functions are lib/substrate-core.sub's, their data functions
+;; data.sub's (d:), and a quoted datum in them is made as data.sub's
+;; quote makes it.
 ;;
 ;; Procedures. Every function is a closure of one signature (spec 5.3),
 ;; the type (procedure): its code takes the closure itself, the number of
@@ -31,12 +36,12 @@
 ;; +, are inline. An inline body stays small: its fast path is inline, and
 ;; anything else, errors included, a call.
 
-(require k kernel bytes)
+(require d "data.sub" bytes quote quasiquote)
 
 (provide [define substrate-define] [lambda substrate-lambda] [case-lambda substrate-case-lambda]
          [set! substrate-set!] [#%app app] [#%datum datum]
          [if substrate-if] [let substrate-let] [let* substrate-let*] letrec
-         [struct substrate-struct] [define-syntax substrate-define-syntax] transformer
+         [struct substrate-struct] quote quasiquote
          ;; equivalence and predicates
          eq? eqv? equal? not boolean? procedure?
          ;; pairs and lists
@@ -64,15 +69,11 @@
          ;; hash tables
          make-hash make-hasheq make-hasheqv hash? hash-count hash-ref hash-has-key? hash-set!
          hash-update! hash-remove! hash-clear! hash-keys hash-values hash->list hash-for-each
-         ;; syntax
-         syntax? identifier? syntax-e syntax->list syntax->datum datum->syntax syntax-rewrap
-         syntax-property free-identifier=? syntax-local-value identifier-binding-kind
-         local-expand syntax-local-lift-definition raise-syntax-error transformer? transformer-env
          ;; output and errors
          write display newline write-byte write-bytes open-output-bytes get-output-bytes
          call-with-output-bytes file-position printf eprintf format error
          ;; exceptions
-         raise call-with-handlers dynamic-wind exn? exn-message syntax-error?
+         raise call-with-handlers dynamic-wind exn? exn-message
          ;; the host: files, the command line, instantiating code
          file->bytes file->string file-exists? display-to-file current-command-line-arguments instantiate exit)
 
@@ -105,7 +106,7 @@
 ;; first four.
 (begin-for-syntax
   (require k kernel)
-  (func (procedure [stx eqref]) -> eqref #'(closure (i32 eqref eqref eqref eqref -> eqref))))
+  (func (procedure [stx i32]) -> i32 #'(closure (i32 eqref eqref eqref eqref -> eqref))))
 (define-syntax procedure procedure)
 
 ;; ---- run-time errors ---------------------------------------------------------------
@@ -143,12 +144,12 @@
 (func (arity-error [name eqref] [n i32] [rest i32] [nargs i32]) -> eqref
   (fail-format (if (ref.is_null name) '"lambda" name)
                (if rest '"expected at least ~a argument~a, got ~a" '"expected ~a argument~a, got ~a")
-               (k:cons (k:fixnum n) (k:cons (plural n) (k:cons (k:fixnum nargs) '())))))
+               (d:cons (d:fixnum n) (d:cons (plural n) (d:cons (d:fixnum nargs) '())))))
 
 ;; A case-lambda named name has no clause that takes nargs arguments.
 (func (no-clause-error [name eqref] [nargs i32]) -> eqref
   (fail-format (if (ref.is_null name) '"lambda" name) '"no clause takes ~a argument~a"
-               (k:cons (k:fixnum nargs) (k:cons (plural nargs) '()))))
+               (d:cons (d:fixnum nargs) (d:cons (plural nargs) '()))))
 
 ;; ---- calls -----------------------------------------------------------------------------
 
@@ -175,7 +176,7 @@
       (loop next
         (br-if done (i32.le_s j i))
         (set! j (i32.sub j 1))
-        (set! l (k:cons (argument j a0 a1 a2 a3) l))
+        (set! l (d:cons (argument j a0 a1 a2 a3) l))
         (br next)))
     l))
 
@@ -185,20 +186,20 @@
         [a0 eqref (ref.null eq)] [a1 eqref (ref.null eq)] [a2 eqref (ref.null eq)] [a3 eqref (ref.null eq)])
     (block done
       (loop next
-        (br-if done (i32.eqz (k:pair? rest)))
-        (let ([v (k:car rest)])
+        (br-if done (i32.eqz (d:pair? rest)))
+        (let ([v (d:car rest)])
           (if (i32.eq n 0) (set! a0 v)
               (if (i32.eq n 1) (set! a1 v)
                   (if (i32.eq n 2) (set! a2 v)
                       (if (i32.eq n 3) (set! a3 v) (set-extra-arg (i32.sub n 4) v))))))
         (set! n (i32.add n 1))
-        (set! rest (k:cdr rest))
+        (set! rest (d:cdr rest))
         (br next)))
     (#%app c n a0 a1 a2 a3)))
 
 ;; (a ... l): the list of the a ... followed by the elements of l.
 (func (spread [args eqref]) -> eqref
-  (if (k:null? (k:cdr args)) (k:car args) (k:cons (k:car args) (spread (k:cdr args)))))
+  (if (d:null? (d:cdr args)) (d:car args) (d:cons (d:car args) (spread (d:cdr args)))))
 
 ;; ---- output ----------------------------------------------------------------------------
 ;;
@@ -243,14 +244,14 @@
 
 ;; The bytes written to p, as a new string, or #f if they are not UTF-8.
 (func (port-string [p (ref port)]) -> eqref
-  (let ([b (k:make-string-builder)] [a (struct.get port bytes p)] [i 0])
+  (let ([b (d:make-string-builder)] [a (struct.get port bytes p)] [i 0])
     (block done
       (loop next
         (br-if done (i32.ge_u i (struct.get port length p)))
-        (k:string-builder-add-byte! b (array.get_u bytes a i))
+        (d:string-builder-add-byte! b (array.get_u bytes a i))
         (set! i (i32.add i 1))
         (br next)))
-    (k:string-builder->string b)))
+    (d:string-builder->string b)))
 
 ;; Pass what was written to p to the host, through bytes 8192.. of this
 ;; memory, and empty p; nothing for a port that keeps its bytes.
@@ -275,16 +276,16 @@
 
 ;; The name of the function an error is about: a string, or a symbol.
 (func (out-who [p (ref port)] [who eqref])
-  (out-string p (if (k:symbol? who) (k:symbol->string who) who) 0))
+  (out-string p (if (d:symbol? who) (d:symbol->string who) who) 0))
 
 ;; String s's bytes; if escape, as write writes them, for the reader: " and
 ;; \ escaped, \n, \t and \r, and \xH; for the other control characters.
 (func (out-string [p (ref port)] [s eqref] [escape i32])
-  (let ([n (k:string-length s)] [i 0] [b 0])
+  (let ([n (d:string-length s)] [i 0] [b 0])
     (block done
       (loop next
         (br-if done (i32.ge_u i n))
-        (set! b (k:string-byte s i))
+        (set! b (d:string-byte s i))
         (set! i (i32.add i 1))
         (if (i32.eqz escape) (begin (out-byte p b) (br next)))
         (if (i32.or (i32.eq b 34) (i32.eq b 92)) (begin (out-byte p 92) (out-byte p b) (br next)))
@@ -326,17 +327,17 @@
 ;; v as display (if display) or write writes it.
 (func (out-datum [p (ref port)] [v eqref] [display i32])
   (if (ref.is_null v) (return (out-string p '"#f" 0)))
-  (if (k:integer? v)
+  (if (d:integer? v)
       (begin
-        (if (k:integer-negative? v)
-            (begin (out-byte p 45) (out-u64 p (i64.sub 0 (k:integer-value v))))
-            (out-u64 p (k:integer-value v)))
+        (if (d:integer-negative? v)
+            (begin (out-byte p 45) (out-u64 p (i64.sub 0 (d:integer-value v))))
+            (out-u64 p (d:integer-value v)))
         (return)))
-  (if (k:flonum? v) (return (out-flonum p (k:flonum-value v))))
+  (if (d:flonum? v) (return (out-flonum p (d:flonum-value v))))
   (if (ref.eq v '#t) (return (out-string p '"#t" 0)))
-  (if (k:null? v) (return (out-string p '"()" 0)))
-  (if (k:char? v)
-      (let ([cp (k:char->integer v)])
+  (if (d:null? v) (return (out-string p '"()" 0)))
+  (if (d:char? v)
+      (let ([cp (d:char->integer v)])
         (if display (return (out-char p cp)))
         (out-string p '"#\\" 0)
         (if (i32.eq cp 32) (return (out-string p '"space" 0)))
@@ -350,31 +351,31 @@
         (if (i32.eq cp 127) (return (out-string p '"delete" 0)))
         (if (i32.lt_u cp 32) (begin (out-byte p 120) (return (out-hex p cp))))
         (return (out-char p cp))))
-  (if (k:symbol? v) (return (out-string p (k:symbol->string v) 0)))
-  (if (k:keyword? v) (begin (out-string p '"#:" 0) (return (out-string p (k:keyword->string v) 0))))
-  (if (k:string? v)
+  (if (d:symbol? v) (return (out-string p (d:symbol->string v) 0)))
+  (if (d:keyword? v) (begin (out-string p '"#:" 0) (return (out-string p (d:keyword->string v) 0))))
+  (if (d:string? v)
       (begin
         (if display (return (out-string p v 0)))
         (out-byte p 34)
         (out-string p v 1)
         (return (out-byte p 34))))
-  (if (k:pair? v)
+  (if (d:pair? v)
       (let ([prefix (abbreviation v)])
         (if (i32.eqz (ref.is_null prefix))
             (begin
               (out-string p prefix 0)
-              (return (out-datum p (k:cadr v) display))))
+              (return (out-datum p (d:cadr v) display))))
         (out-byte p 40)
-        (out-datum p (k:car v) display)
-        (set! v (k:cdr v))
+        (out-datum p (d:car v) display)
+        (set! v (d:cdr v))
         (block done
           (loop next
-            (br-if done (i32.eqz (k:pair? v)))
+            (br-if done (i32.eqz (d:pair? v)))
             (out-byte p 32)
-            (out-datum p (k:car v) display)
-            (set! v (k:cdr v))
+            (out-datum p (d:car v) display)
+            (set! v (d:cdr v))
             (br next)))
-        (if (i32.eqz (k:null? v))
+        (if (i32.eqz (d:null? v))
             (begin (out-string p '" . " 0) (out-datum p v display)))
         (return (out-byte p 41))))
   (if (ref.test (ref vector) v)
@@ -401,19 +402,14 @@
   (if (ref.test (ref box) v)
       (begin (out-string p '"#&" 0) (return (out-datum p (struct.get box value (ref.cast (ref box) v)) display))))
   (if (ref.test (ref port) v) (return (out-string p '"#<port>" 0)))
-  (if (k:syntax? v)
-      (begin
-        (out-string p '"#<syntax " 0)
-        (out-datum p (k:syntax->datum v) 0)
-        (return (out-byte p 62))))
   (out-string p '"#<other>" 0))
 
 ;; The prefix a two-element list (quote x) and its kin are written with,
 ;; as they read: 'x, `x, ,x, ,@x, #'x, #`x, #,x and #,@x; else #f.
 (func (abbreviation [v eqref]) -> eqref
-  (let ([head (k:car v)] [rest (k:cdr v)])
-    (if (i32.eqz (k:pair? rest)) (return '#f))
-    (if (i32.eqz (k:null? (k:cdr rest))) (return '#f))
+  (let ([head (d:car v)] [rest (d:cdr v)])
+    (if (i32.eqz (d:pair? rest)) (return '#f))
+    (if (i32.eqz (d:null? (d:cdr rest))) (return '#f))
     (if (ref.eq head 'quote) (return '"'"))
     (if (ref.eq head 'quasiquote) (return '"`"))
     (if (ref.eq head 'unquote) (return '","))
@@ -453,10 +449,10 @@
     (out-string p (if (i32.eqz kind) '"#hasheq(" (if (i32.eq kind 1) '"#hasheqv(" '"#hash(")) 0)
     (block done
       (loop next
-        (br-if done (i32.eqz (k:pair? l)))
-        (out-datum p (k:car l) display)
-        (set! l (k:cdr l))
-        (if (k:pair? l) (out-byte p 32))
+        (br-if done (i32.eqz (d:pair? l)))
+        (out-datum p (d:car l) display)
+        (set! l (d:cdr l))
+        (if (d:pair? l) (out-byte p 32))
         (br next)))
     (out-byte p 41)))
 
@@ -476,13 +472,11 @@
 
 ;; Raise v.
 (func (raise* [v eqref]) -> eqref
-  (if (taken? v) (throw k:exn v))
+  (if (taken? v) (throw d:exn v))
   (let ([p (new-port -1)])
     (if (ref.test (ref exception) v)
         (out-string p (struct.get exception message (ref.cast (ref exception) v)) 0)
-        (if (k:syntax-error? v)
-            (out-string p (k:syntax-error-message v) 0)
-            (begin (out-string p '"uncaught exception: " 0) (out-datum p v 0))))
+        (begin (out-string p '"uncaught exception: " 0) (out-datum p v 0)))
     (trap-with p)))
 
 ;; Whether a predicate of an installed handler is true of v.
@@ -490,15 +484,15 @@
   (let ([hs handlers] [ps '()])
     (block done
       (loop next
-        (br-if done (i32.eqz (k:pair? hs)))
-        (set! ps (k:car hs))
+        (br-if done (i32.eqz (d:pair? hs)))
+        (set! ps (d:car hs))
         (block tried
           (loop each
-            (br-if tried (i32.eqz (k:pair? ps)))
-            (if (i32.eqz (ref.is_null (app (k:car ps) v))) (return 1))
-            (set! ps (k:cdr ps))
+            (br-if tried (i32.eqz (d:pair? ps)))
+            (if (i32.eqz (ref.is_null (app (d:car ps) v))) (return 1))
+            (set! ps (d:cdr ps))
             (br each)))
-        (set! hs (k:cdr hs))
+        (set! hs (d:cdr hs))
         (br next)))
     0))
 
@@ -517,10 +511,10 @@
 
 ;; Function who (a string) needs what (a string) where it was given v.
 (func (wrong-type [who eqref] [what eqref] [v eqref]) -> eqref
-  (fail-format who '"expected ~a, got ~s" (k:cons what (k:cons v '()))))
+  (fail-format who '"expected ~a, got ~s" (d:cons what (d:cons v '()))))
 
 (func (index-error [who eqref] [k eqref]) -> eqref
-  (fail-format who '"index ~s is out of range" (k:cons k '())))
+  (fail-format who '"index ~s is out of range" (d:cons k '())))
 
 ;; ---- integers --------------------------------------------------------------------------
 
@@ -528,18 +522,18 @@
 
 ;; The arithmetic below takes a fast path when its arguments are fixnums,
 ;; inline, and calls out for anything else, including errors.
-(func (fixnums? [a eqref] [b eqref]) #:inline -> i32 (i32.and (k:fixnum? a) (k:fixnum? b)))
+(func (fixnums? [a eqref] [b eqref]) #:inline -> i32 (i32.and (d:fixnum? a) (d:fixnum? b)))
 (func (fixnum-of [v eqref]) #:inline -> i32 (i31.get_s (ref.cast (ref i31) v)))
 
 ;; Integer v's value, for function who: it must fit in a signed i64.
 (func (int-value [v eqref] [who eqref]) -> i64
-  (if (k:fixnum? v) (return (i64.extend_i32_s (fixnum-of v))))
+  (if (d:fixnum? v) (return (i64.extend_i32_s (fixnum-of v))))
   (big-int-value v who))
 
 (func (big-int-value [v eqref] [who eqref]) -> i64
-  (if (i32.eqz (k:integer? v)) (drop (wrong-type who '"an integer" v)))
-  (let ([x (k:integer-value v)])
-    (if (i32.eqz (k:integer-negative? v))
+  (if (i32.eqz (d:integer? v)) (drop (wrong-type who '"an integer" v)))
+  (let ([x (d:integer-value v)])
+    (if (i32.eqz (d:integer-negative? v))
         (if (i64.lt_s x 0) (overflow)))
     x))
 
@@ -554,28 +548,28 @@
 ;; Two fixnums' sum, difference or product fits in an i64.
 (func (add [a eqref] [b eqref]) #:inline -> eqref
   (if (fixnums? a b)
-      (k:integer (i64.extend_i32_s (i32.add (fixnum-of a) (fixnum-of b))))
+      (d:integer (i64.extend_i32_s (i32.add (fixnum-of a) (fixnum-of b))))
       (add-integers a b)))
 
 (func (sub [a eqref] [b eqref]) #:inline -> eqref
   (if (fixnums? a b)
-      (k:integer (i64.extend_i32_s (i32.sub (fixnum-of a) (fixnum-of b))))
+      (d:integer (i64.extend_i32_s (i32.sub (fixnum-of a) (fixnum-of b))))
       (sub-integers a b)))
 
 (func (mul [a eqref] [b eqref]) #:inline -> eqref
   (if (fixnums? a b)
-      (k:integer (i64.mul (i64.extend_i32_s (fixnum-of a)) (i64.extend_i32_s (fixnum-of b))))
+      (d:integer (i64.mul (i64.extend_i32_s (fixnum-of a)) (i64.extend_i32_s (fixnum-of b))))
       (mul-integers a b)))
 
 (func (add-integers [a eqref] [b eqref]) -> eqref
   (let* ([x (int-value a '"+")] [y (int-value b '"+")] [r (i64.add x y)])
     (if (i64.lt_s (i64.and (i64.xor x r) (i64.xor y r)) 0) (overflow))
-    (k:integer r)))
+    (d:integer r)))
 
 (func (sub-integers [a eqref] [b eqref]) -> eqref
   (let* ([x (int-value a '"-")] [y (int-value b '"-")] [r (i64.sub x y)])
     (if (i64.lt_s (i64.and (i64.xor x y) (i64.xor x r)) 0) (overflow))
-    (k:integer r)))
+    (d:integer r)))
 
 (func (mul-integers [a eqref] [b eqref]) -> eqref
   (let* ([x (int-value a '"*")] [y (int-value b '"*")] [r (i64.mul x y)])
@@ -583,7 +577,7 @@
         (if (i32.and (i64.eq x -1) (i64.eq y -9223372036854775808))
             (overflow)
             (if (i64.ne (i64.div_s r x) y) (overflow))))
-    (k:integer r)))
+    (d:integer r)))
 
 (func (divisor [b eqref] [who eqref]) -> i64
   (let ([y (int-value b who)])
@@ -593,21 +587,21 @@
 (func (quo [a eqref] [b eqref]) -> eqref
   (let* ([x (int-value a '"quotient")] [y (divisor b '"quotient")])
     (if (i32.and (i64.eq x -9223372036854775808) (i64.eq y -1)) (overflow))
-    (k:integer (i64.div_s x y))))
+    (d:integer (i64.div_s x y))))
 
 (func (rem [a eqref] [b eqref]) -> eqref
   (let* ([x (int-value a '"remainder")] [y (divisor b '"remainder")])
-    (if (i64.eq y -1) (return (k:integer 0)))
-    (k:integer (i64.rem_s x y))))
+    (if (i64.eq y -1) (return (d:integer 0)))
+    (d:integer (i64.rem_s x y))))
 
 ;; The remainder with the divisor's sign.
 (func (floor-remainder [a eqref] [b eqref]) -> eqref
   (let* ([x (int-value a '"modulo")] [y (divisor b '"modulo")])
-    (if (i64.eq y -1) (return (k:integer 0)))
+    (if (i64.eq y -1) (return (d:integer 0)))
     (let ([r (i64.rem_s x y)])
       (if (i64.ne r 0)
           (if (i32.ne (i64.lt_s r 0) (i64.lt_s y 0)) (set! r (i64.add r y))))
-      (k:integer r))))
+      (d:integer r))))
 
 ;; op: 0 <, 1 >, 2 <=, 3 >=, 4 =.
 (func (compare [op i32] [a eqref] [b eqref]) -> i32
@@ -642,7 +636,7 @@
 
 ;; Element i of list l.
 (func (list-nth [l eqref] [i i32]) -> eqref
-  (if (i32.eqz i) (k:car l) (list-nth (k:cdr l) (i32.sub i 1))))
+  (if (i32.eqz i) (d:car l) (list-nth (d:cdr l) (i32.sub i 1))))
 
 ;; The name of the comparison of kind (0 numbers, 1 characters, 2 strings)
 ;; by op, for errors.
@@ -660,13 +654,13 @@
   (let ([ok 1])
     (block done
       (loop next
-        (br-if done (i32.eqz (k:pair? l)))
+        (br-if done (i32.eqz (d:pair? l)))
         (if (i32.eqz (if (i32.eqz kind)
-                         (compare op a (k:car l))
-                         (if (i32.eq kind 1) (char-compare op a (k:car l)) (string-compare op a (k:car l)))))
+                         (compare op a (d:car l))
+                         (if (i32.eq kind 1) (char-compare op a (d:car l)) (string-compare op a (d:car l)))))
             (set! ok 0))
-        (set! a (k:car l))
-        (set! l (k:cdr l))
+        (set! a (d:car l))
+        (set! l (d:cdr l))
         (br next)))
     (bool ok)))
 
@@ -675,9 +669,9 @@
 (func (fold-op [op i32] [a eqref] [l eqref]) -> eqref
   (block done
     (loop next
-      (br-if done (i32.eqz (k:pair? l)))
-      (set! a (arith op a (k:car l)))
-      (set! l (k:cdr l))
+      (br-if done (i32.eqz (d:pair? l)))
+      (set! a (arith op a (d:car l)))
+      (set! l (d:cdr l))
       (br next)))
   a)
 
@@ -690,7 +684,7 @@
 (func (bitwise [op i32] [a eqref] [b eqref]) -> eqref
   (let ([who (if (i32.eq op 3) '"bitwise-and" (if (i32.eq op 4) '"bitwise-ior" '"bitwise-xor"))])
     (let ([x (int-value a who)] [y (int-value b who)])
-      (k:integer (if (i32.eq op 3) (i64.and x y) (if (i32.eq op 4) (i64.or x y) (i64.xor x y)))))))
+      (d:integer (if (i32.eq op 3) (i64.and x y) (if (i32.eq op 4) (i64.or x y) (i64.xor x y)))))))
 
 ;; a shifted left by k bits, or right if k is negative.
 (func (shift [a eqref] [k eqref]) -> eqref
@@ -698,39 +692,39 @@
     (if (i64.ge_s n 0)
         (begin
           (if (i64.ge_s n 64)
-              (begin (if (i64.ne x 0) (overflow)) (return (k:integer 0))))
+              (begin (if (i64.ne x 0) (overflow)) (return (d:integer 0))))
           (let ([r (i64.shl x n)])
             (if (i64.ne (i64.shr_s r n) x) (overflow))
-            (return (k:integer r)))))
-    (if (i64.le_s n -64) (return (k:integer (i64.shr_s x 63))))
-    (k:integer (i64.shr_s x (i64.sub 0 n)))))
+            (return (d:integer r)))))
+    (if (i64.le_s n -64) (return (d:integer (i64.shr_s x 63))))
+    (d:integer (i64.shr_s x (i64.sub 0 n)))))
 
 ;; n in radix (2 to 16), as a new string.
 (func (number-string [n i64] [radix i64]) -> eqref
   (if (i64.lt_s n 0)
-      (return (k:string-append '"-" (unsigned-string (i64.sub 0 n) radix))))
+      (return (d:string-append '"-" (unsigned-string (i64.sub 0 n) radix))))
   (unsigned-string n radix))
 
 (func (unsigned-string [n i64] [radix i64]) -> eqref
   (let ([d (digit-string (i32.wrap_i64 (i64.rem_u n radix)))])
-    (if (i64.lt_u n radix) d (k:string-append (unsigned-string (i64.div_u n radix) radix) d))))
+    (if (i64.lt_u n radix) d (d:string-append (unsigned-string (i64.div_u n radix) radix) d))))
 
 (func (digit-string [d i32]) -> eqref
   (let ([l '("0" "1" "2" "3" "4" "5" "6" "7" "8" "9" "a" "b" "c" "d" "e" "f")] [i d])
     (block done
       (loop next
         (br-if done (i32.eqz i))
-        (set! l (k:cdr l))
+        (set! l (d:cdr l))
         (set! i (i32.sub i 1))
         (br next)))
-    (k:string-append '"" (k:car l))))
+    (d:string-append '"" (d:car l))))
 
 ;; The integer string s writes in radix, or #f: an optional sign, then
 ;; digits. An integer outside the signed 64-bit range is an error.
 (func (parse-integer [s eqref] [radix i64]) -> eqref
-  (let ([n (k:string-length s)] [i 0] [negative 0] [x i64 0] [d 0] [b 0] [start 0])
+  (let ([n (d:string-length s)] [i 0] [negative 0] [x i64 0] [d 0] [b 0] [start 0])
     (if (i32.eqz n) (return '#f))
-    (set! b (k:string-byte s 0))
+    (set! b (d:string-byte s 0))
     (if (i32.or (i32.eq b 45) (i32.eq b 43))
         (begin (set! negative (i32.eq b 45)) (set! i 1)))
     (if (i32.ge_u i n) (return '#f))
@@ -738,14 +732,14 @@
     (block done
       (loop next
         (br-if done (i32.ge_u i n))
-        (if (i64.ge_u (i64.extend_i32_s (digit-value-of (k:string-byte s i))) radix) (return '#f))
+        (if (i64.ge_u (i64.extend_i32_s (digit-value-of (d:string-byte s i))) radix) (return '#f))
         (set! i (i32.add i 1))
         (br next)))
     (set! i start)
     (block done
       (loop next
         (br-if done (i32.ge_u i n))
-        (set! d (digit-value-of (k:string-byte s i)))
+        (set! d (digit-value-of (d:string-byte s i)))
         ;; x = x * radix - d, kept negative so -2^63 fits.
         (if (i64.lt_s x (i64.div_s -9223372036854775808 radix)) (overflow))
         (set! x (i64.mul x radix))
@@ -753,9 +747,9 @@
         (set! x (i64.sub x (i64.extend_i32_u d)))
         (set! i (i32.add i 1))
         (br next)))
-    (if negative (return (k:integer x)))
+    (if negative (return (d:integer x)))
     (if (i64.eq x -9223372036854775808) (overflow))
-    (k:integer (i64.sub 0 x))))
+    (d:integer (i64.sub 0 x))))
 
 ;; A digit's value, up to f in either case; 99 for anything else.
 (func (digit-value-of [b i32]) -> i32
@@ -779,11 +773,11 @@
 ;; n in radix, as a new string: an integer in radix 2 to 16, a flonum in
 ;; radix 10.
 (func (number-string-of [n eqref] [radix eqref]) -> eqref
-  (if (k:flonum? n)
+  (if (d:flonum? n)
       (let ([p (new-port -1)])
         (if (i64.ne (radix-value radix '"number->string") 10)
             (drop (wrong-type '"number->string" '"radix 10 for a flonum" radix)))
-        (out-flonum p (k:flonum-value n))
+        (out-flonum p (d:flonum-value n))
         (return (port-string p))))
   (number-string (int-value n '"number->string") (radix-value radix '"number->string")))
 
@@ -798,24 +792,24 @@
 ;; +inf.0, -inf.0, +nan.0 or -nan.0. An exponent beyond 100000 in size
 ;; makes any decimal zero or infinite, as 100000 does.
 (func (parse-decimal [s eqref]) -> eqref
-  (let ([n (k:string-length s)] [i 0] [b 0] [negative 0] [ds '()] [digits 0] [point 0]
+  (let ([n (d:string-length s)] [i 0] [b 0] [negative 0] [ds '()] [digits 0] [point 0]
         [fraction 0] [exponent 0] [exponent-negative 0] [has-exponent 0])
     (if (i32.eqz n) (return '#f))
-    (set! b (k:string-byte s 0))
+    (set! b (d:string-byte s 0))
     (if (i32.or (i32.eq b 45) (i32.eq b 43))
         (begin
           (set! negative (i32.eq b 45))
           (set! i 1)
-          (if (bytes-from? s 1 '"inf.0") (return (k:flonum (if negative (f64.div -1 0) (f64.div 1 0)))))
-          (if (bytes-from? s 1 '"nan.0") (return (k:flonum (f64.div 0 0))))))
+          (if (bytes-from? s 1 '"inf.0") (return (d:flonum (if negative (f64.div -1 0) (f64.div 1 0)))))
+          (if (bytes-from? s 1 '"nan.0") (return (d:flonum (f64.div 0 0))))))
     (block done
       (loop next
         (br-if done (i32.ge_u i n))
-        (set! b (k:string-byte s i))
+        (set! b (d:string-byte s i))
         (if (i32.and (i32.eq b 46) (i32.eqz point))
             (begin (set! point 1) (set! i (i32.add i 1)) (br next)))
         (br-if done (i32.gt_u (i32.sub b 48) 9))
-        (set! ds (k:cons (ref.i31 (i32.sub b 48)) ds))
+        (set! ds (d:cons (ref.i31 (i32.sub b 48)) ds))
         (set! digits (i32.add digits 1))
         (if point (set! fraction (i32.add fraction 1)))
         (set! i (i32.add i 1))
@@ -823,20 +817,20 @@
     (if (i32.eqz digits) (return '#f))
     (if (i32.lt_u i n)
         (begin
-          (set! b (k:string-byte s i))
+          (set! b (d:string-byte s i))
           (if (i32.and (i32.ne b 101) (i32.ne b 69)) (return '#f))
           (set! has-exponent 1)
           (set! i (i32.add i 1))
           (if (i32.lt_u i n)
               (begin
-                (set! b (k:string-byte s i))
+                (set! b (d:string-byte s i))
                 (if (i32.or (i32.eq b 45) (i32.eq b 43))
                     (begin (set! exponent-negative (i32.eq b 45)) (set! i (i32.add i 1))))))
           (if (i32.ge_u i n) (return '#f))
           (block done
             (loop next
               (br-if done (i32.ge_u i n))
-              (set! b (k:string-byte s i))
+              (set! b (d:string-byte s i))
               (if (i32.gt_u (i32.sub b 48) 9) (return '#f))
               (if (i32.lt_u exponent 100000)
                   (set! exponent (i32.add (i32.mul exponent 10) (i32.sub b 48))))
@@ -844,18 +838,18 @@
               (br next)))
           (if (i32.gt_u exponent 100000) (set! exponent 100000))))
     (if (i32.eqz (i32.or point has-exponent)) (return '#f))
-    (decimal-flonum (k:reverse ds)
+    (decimal-flonum (d:reverse ds)
                     (i32.sub (if exponent-negative (i32.sub 0 exponent) exponent) fraction)
                     negative)))
 
 ;; Whether string s's bytes from i on are string t's.
 (func (bytes-from? [s eqref] [i i32] [t eqref]) -> i32
-  (let ([n (k:string-length t)] [j 0])
-    (if (i32.ne (i32.sub (k:string-length s) i) n) (return 0))
+  (let ([n (d:string-length t)] [j 0])
+    (if (i32.ne (i32.sub (d:string-length s) i) n) (return 0))
     (block done
       (loop next
         (br-if done (i32.ge_u j n))
-        (if (i32.ne (k:string-byte s (i32.add i j)) (k:string-byte t j)) (return 0))
+        (if (i32.ne (d:string-byte s (i32.add i j)) (d:string-byte t j)) (return 0))
         (set! j (i32.add j 1))
         (br next)))
     1))
@@ -865,13 +859,13 @@
 ;; value, ties to even: infinity above the largest, zero below half the
 ;; smallest.
 (func (decimal-flonum [ds eqref] [k i32] [negative i32]) -> eqref
-  (let ([nd (k:length ds)] [bits i64 0] [x f64 0])
+  (let ([nd (d:length ds)] [bits i64 0] [x f64 0])
     ;; Leading zeros add nothing.
     (block done
       (loop next
-        (br-if done (i32.eqz (k:pair? ds)))
-        (br-if done (i32.ne (k:fixnum-value (k:car ds)) 0))
-        (set! ds (k:cdr ds))
+        (br-if done (i32.eqz (d:pair? ds)))
+        (br-if done (i32.ne (d:fixnum-value (d:car ds)) 0))
+        (set! ds (d:cdr ds))
         (set! nd (i32.sub nd 1))
         (br next)))
     (set! bits
@@ -886,7 +880,7 @@
                           (i64.reinterpret_f64 (small-decimal ds k))
                           (big-decimal ds nd k))))))
     (set! x (f64.reinterpret_i64 bits))
-    (k:flonum (if negative (f64.neg x) x))))
+    (d:flonum (if negative (f64.neg x) x))))
 
 ;; D × 10^k for D below 10^15, so below 2^53, and |k| ≤ 22: D and 10^|k|
 ;; are exact f64s, and one multiplication or division rounds once.
@@ -894,9 +888,9 @@
   (let ([n i64 0] [p f64 1] [i 0])
     (block done
       (loop next
-        (br-if done (i32.eqz (k:pair? ds)))
-        (set! n (i64.add (i64.mul n 10) (i64.extend_i32_u (k:fixnum-value (k:car ds)))))
-        (set! ds (k:cdr ds))
+        (br-if done (i32.eqz (d:pair? ds)))
+        (set! n (i64.add (i64.mul n 10) (i64.extend_i32_u (d:fixnum-value (d:car ds)))))
+        (set! ds (d:cdr ds))
         (br next)))
     (block done
       (loop next
@@ -916,9 +910,9 @@
          [mant i64 0] [e2 0])
     (block done
       (loop next
-        (br-if done (i32.eqz (k:pair? ds)))
-        (big-mul-add! n 10 (i64.extend_i32_u (k:fixnum-value (k:car ds))))
-        (set! ds (k:cdr ds))
+        (br-if done (i32.eqz (d:pair? ds)))
+        (big-mul-add! n 10 (i64.extend_i32_u (d:fixnum-value (d:car ds))))
+        (set! ds (d:cdr ds))
         (br next)))
     (array.set limbs m 0 1)
     (block done
@@ -1186,39 +1180,39 @@
 (begin-for-syntax
   (require k kernel)
 
-  (func (named? [x eqref] [name eqref]) -> i32
-    (if (k:identifier? x) (ref.eq (k:syntax-e x) name) 0))
+  (func (named? [x i32] [name i32]) -> i32
+    (if (k:identifier? x) (i32.eq (k:syntax-e x) name) 0))
 
-  (func (nth [l eqref] [i i32]) -> eqref
+  (func (nth [l i32] [i i32]) -> i32
     (if (i32.eqz i) (k:car l) (nth (k:cdr l) (i32.sub i 1))))
 
   ;; Is x in l, by identity?
-  (func (member? [x eqref] [l eqref]) -> i32
+  (func (member? [x i32] [l i32]) -> i32
     (if (k:null? l) (return 0))
-    (if (ref.eq x (k:car l)) (return 1))
+    (if (i32.eq x (k:car l)) (return 1))
     (member? x (k:cdr l)))
 
-  (func (take [l eqref] [n i32]) -> eqref
+  (func (take [l i32] [n i32]) -> i32
     (if (i32.eqz n) '() (k:cons (k:car l) (take (k:cdr l) (i32.sub n 1)))))
 
-  (func (drop-n [l eqref] [n i32]) -> eqref
+  (func (drop-n [l i32] [n i32]) -> i32
     (if (i32.eqz n) l (drop-n (k:cdr l) (i32.sub n 1))))
 
-  (func (number [n i32]) -> eqref (k:datum->syntax #'here (k:fixnum n) '#f))
+  (func (number [n i32]) -> i32 (k:datum->syntax #'here (k:fixnum n) '#f))
 
   ;; ---- fresh names ----
 
-  (func (digits [n i32]) -> eqref
+  (func (digits [n i32]) -> i32
     (let ([d (nth '("0" "1" "2" "3" "4" "5" "6" "7" "8" "9") (i32.rem_u n 10))])
       (if (i32.lt_u n 10) d (k:string-append (digits (i32.div_u n 10)) d))))
 
-  (func (numbered [prefix eqref] [n i32]) -> eqref
+  (func (numbered [prefix i32] [n i32]) -> i32
     (k:datum->syntax #'here (k:string->symbol (k:string-append (k:symbol->string prefix) (digits n))) '#f))
 
   ;; Lifted definitions are named after their function, or lambda, and a
   ;; number: car1, lambda2, closure3, ... in each module.
   (global counter (mut i32) 0)
-  (func (fresh-name [prefix eqref]) -> eqref
+  (func (fresh-name [prefix i32]) -> i32
     (set! counter (i32.add counter 1))
     (numbered prefix counter))
 
@@ -1226,7 +1220,7 @@
 
   ;; A parameter list, (x ...), (x ... . rest) or rest, as (required . rest),
   ;; where rest is #f if there is none.
-  (func (parse-params [ps eqref]) -> eqref
+  (func (parse-params [ps i32]) -> i32
     (if (k:identifier? ps) (return (k:cons '() ps)))
     (let ([l (k:splice-list ps)] [required '()])
       (block done
@@ -1242,7 +1236,7 @@
 
   ;; Bindings of parameters ps to arguments i, i + 1, ...: each one of the
   ;; first four, or an extra one.
-  (func (param-inits [ps eqref] [i i32]) -> eqref
+  (func (param-inits [ps i32] [i i32]) -> i32
     (if (k:null? ps) (return '()))
     (k:cons #`[#,(k:car ps) #,(if (i32.lt_u i 4)
                                   (nth (k:syntax->list #'(a0 a1 a2 a3)) i)
@@ -1252,43 +1246,43 @@
   ;; The first of clauses cs, each (params body ...), that takes nargs
   ;; arguments, or an error naming name. single: there is one clause, whose
   ;; error says what it takes.
-  (func (dispatch [cs eqref] [name eqref] [single i32]) -> eqref
+  (func (dispatch [cs i32] [name i32] [single i32]) -> i32
     (if (k:null? cs) (return #`(no-clause-error '#,name nargs)))
     (let* ([c (k:car cs)]
            [p (parse-params (k:car c))]
            [rest (k:cdr p)]
            [n (k:length (k:car p))]
            [inits (k:append (param-inits (k:car p) 0)
-                            (if (ref.is_null rest)
+                            (if (i32.eqz rest)
                                 '()
                                 (k:cons #`[#,rest (rest-arguments #,(number n) nargs a0 a1 a2 a3)] '())))])
-      #`(if #,(if (ref.is_null rest) #`(i32.eq nargs #,(number n)) #`(i32.ge_u nargs #,(number n)))
+      #`(if #,(if (i32.eqz rest) #`(i32.eq nargs #,(number n)) #`(i32.ge_u nargs #,(number n)))
             (let (#,@inits) #,@(k:cdr c))
             #,(if single
-                  #`(arity-error '#,name #,(number n) #,(number (i32.eqz (ref.is_null rest))) nargs)
+                  #`(arity-error '#,name #,(number n) #,(number (i32.eqz (i32.eqz rest))) nargs)
                   (dispatch (k:cdr cs) name 0)))))
 
   ;; The kernel lambda of a function with clauses cs, named name (an
   ;; identifier, or #f) in its errors, located at the form where.
-  (func (kernel-lambda [cs eqref] [name eqref] [single i32] [where eqref]) -> eqref
+  (func (kernel-lambda [cs i32] [name i32] [single i32] [where i32]) -> i32
     (k:syntax-rewrap
      where
      (k:syntax-e #`(lambda ([nargs i32] [a0 eqref] [a1 eqref] [a2 eqref] [a3 eqref]) -> eqref
-                     #,(dispatch cs (if (ref.is_null name) #'#f name) single)))))
+                     #,(dispatch cs (if (i32.eqz name) #'#f name) single)))))
 
-  (func (case-lambda-clauses [clauses eqref]) -> eqref
+  (func (case-lambda-clauses [clauses i32]) -> i32
     (if (k:null? clauses)
         '()
         (let ([c (k:syntax->list (k:car clauses))])
-          (if (i32.or (ref.is_null c) (k:null? c))
+          (if (i32.or (i32.eqz c) (k:null? c))
               (k:raise-syntax-error 'case-lambda '"expected a clause: [params body ...]" (k:car clauses)))
           (k:cons c (case-lambda-clauses (k:cdr clauses))))))
 
   ;; The kernel lambda for (lambda params body ...) or (case-lambda clause
   ;; ...) e, named name; #f if e is neither.
-  (func (kernel-lambda-of [e eqref] [name eqref]) -> eqref
+  (func (kernel-lambda-of [e i32] [name i32]) -> i32
     (let ([parts (k:syntax->list e)])
-      (if (ref.is_null parts) (return '#f))
+      (if (i32.eqz parts) (return '#f))
       (if (k:null? parts) (return '#f))
       (if (i32.eqz (k:identifier? (k:car parts))) (return '#f))
       (if (k:free-identifier=? (k:car parts) #'substrate-lambda)
@@ -1306,31 +1300,31 @@
   ;; (define (f x ... . rest) body ...), and a lambda or case-lambda with no
   ;; fixed parameters: a closure in an immutable global, whose code is named
   ;; after f. (define x e): a variable.
-  (func (substrate-define [stx eqref]) -> eqref
+  (func (substrate-define [stx i32]) -> i32
     (let* ([parts (k:syntax->list stx)]
-           [inline (if (k:pair? (k:cddr parts)) (ref.eq (k:syntax-e (k:caddr parts)) '#:inline) 0)]
+           [inline (if (k:pair? (k:cddr parts)) (i32.eq (k:syntax-e (k:caddr parts)) '#:inline) 0)]
            [body (if inline (k:cdddr parts) (k:cddr parts))])
       (if (k:identifier? (k:cadr parts))
           (let* ([name (k:cadr parts)] [e (k:car body)] [fixed (fixed-lambda e)] [clauses (case-lambda-of e)]
-                 [k (if (ref.is_null clauses) '#f (first-fixed clauses))])
-            (if (i32.eqz (ref.is_null fixed))
+                 [k (if (i32.eqz clauses) '#f (first-fixed clauses))])
+            (if (i32.eqz (i32.eqz fixed))
                 (return (known-function name (k:car fixed) (k:cdr fixed) '#f inline)))
-            (if (i32.eqz (ref.is_null k)) (return (known-case-lambda name clauses k inline e)))
+            (if (i32.eqz (i32.eqz k)) (return (known-case-lambda name clauses k inline e)))
             (if inline (k:raise-syntax-error 'define '"only a function with fixed parameters can be #:inline" stx))
             (let ([f (kernel-lambda-of e name)])
-              (return (if (ref.is_null f)
+              (return (if (i32.eqz f)
                           #`(global #,name (mut eqref) #,e)
                           #`(global #,name (ref (procedure)) #,f))))))
       (let* ([head (k:splice-list (k:cadr parts))] [name (k:car head)] [p (parse-params (k:cdr head))])
-        (if (ref.is_null (k:cdr p)) (return (known-function name (k:car p) body '#f inline)))
+        (if (i32.eqz (k:cdr p)) (return (known-function name (k:car p) body '#f inline)))
         (if inline (k:raise-syntax-error 'define '"only a function with fixed parameters can be #:inline" stx))
         #`(global #,name (ref (procedure))
                   #,(kernel-lambda (k:cons (k:cons (k:cdr head) body) '()) name 1 stx)))))
 
   ;; The clauses of e if it is (case-lambda clause ...); #f otherwise.
-  (func (case-lambda-of [e eqref]) -> eqref
+  (func (case-lambda-of [e i32]) -> i32
     (let ([parts (k:syntax->list e)])
-      (if (ref.is_null parts) (return '#f))
+      (if (i32.eqz parts) (return '#f))
       (if (k:null? parts) (return '#f))
       (if (i32.eqz (k:identifier? (k:car parts))) (return '#f))
       (if (i32.eqz (k:free-identifier=? (k:car parts) #'substrate-case-lambda)) (return '#f))
@@ -1339,7 +1333,7 @@
   ;; The first clause, (params body ...), whose parameters are fixed and
   ;; which runs whenever a call gives it that many arguments: no clause
   ;; before it takes them with a rest parameter. #f if there is none.
-  (func (first-fixed [cs eqref]) -> eqref
+  (func (first-fixed [cs i32]) -> i32
     ;; The fewest arguments a rest clause so far takes, or -1.
     (let ([fewest-rest -1] [p '#f] [n 0])
       (block done
@@ -1347,7 +1341,7 @@
           (br-if done (k:null? cs))
           (set! p (parse-params (k:car (k:car cs))))
           (set! n (k:length (k:car p)))
-          (if (ref.is_null (k:cdr p))
+          (if (i32.eqz (k:cdr p))
               (if (i32.or (i32.lt_s fewest-rest 0) (i32.gt_s fewest-rest n)) (return (k:car cs)))
               (if (i32.or (i32.lt_s fewest-rest 0) (i32.lt_s n fewest-rest)) (set! fewest-rest n)))
           (set! cs (k:cdr cs))
@@ -1357,38 +1351,38 @@
   ;; name, a case-lambda with clauses cs, of which clause k has fixed
   ;; parameters: the known function runs clause k, and its value is the
   ;; case-lambda, whose clause k calls the function.
-  (func (known-case-lambda [name eqref] [cs eqref] [k eqref] [inline i32] [where eqref]) -> eqref
+  (func (known-case-lambda [name i32] [cs i32] [k i32] [inline i32] [where i32]) -> i32
     (let* ([params (k:car (parse-params (k:car k)))]
            [calling (replace-clause cs k (k:cons (k:car k) (k:cons #`(#,name #,@params) '())))])
       (known-function name params (k:cdr k) (kernel-lambda calling name 0 where) inline)))
 
-  (func (replace-clause [cs eqref] [k eqref] [new eqref]) -> eqref
+  (func (replace-clause [cs i32] [k i32] [new i32]) -> i32
     (if (k:null? cs) (return '()))
-    (k:cons (if (ref.eq (k:car cs) k) new (k:car cs)) (replace-clause (k:cdr cs) k new)))
+    (k:cons (if (i32.eq (k:car cs) k) new (k:car cs)) (replace-clause (k:cdr cs) k new)))
 
   ;; (params . body) of e if it is (lambda (x ...) body ...), with no rest
   ;; parameter; #f otherwise.
-  (func (fixed-lambda [e eqref]) -> eqref
+  (func (fixed-lambda [e i32]) -> i32
     (let ([parts (k:syntax->list e)] [p '#f])
-      (if (ref.is_null parts) (return '#f))
+      (if (i32.eqz parts) (return '#f))
       (if (k:null? parts) (return '#f))
       (if (i32.eqz (k:identifier? (k:car parts))) (return '#f))
       (if (i32.eqz (k:free-identifier=? (k:car parts) #'substrate-lambda)) (return '#f))
       (if (k:null? (k:cdr parts)) (return '#f))
       (set! p (parse-params (k:cadr parts)))
-      (if (ref.is_null (k:cdr p)) (k:cons (k:car p) (k:cddr parts)) '#f)))
+      (if (i32.eqz (k:cdr p)) (k:cons (k:car p) (k:cddr parts)) '#f)))
 
   ;; Known function name, taking params and running body: a kernel function,
   ;; inline if inline, whose value (spec 5.2, #:value) is a procedure made
   ;; once, in a global: the kernel lambda closure if given, else one whose
   ;; code checks the number of arguments and calls the function.
-  (func (known-function [name eqref] [params eqref] [body eqref] [closure eqref] [inline i32]) -> eqref
+  (func (known-function [name i32] [params i32] [body i32] [closure i32] [inline i32]) -> i32
     (let ([n (k:length params)] [value (hidden-name name '".value")])
       #`(begin
           (func (#,name #,@(eqref-params params)) #,@(if inline (k:syntax->list #'(#:inline)) '())
             #:value #,value -> eqref #,@body)
           (global #,value (ref (procedure))
-                  #,(if (i32.eqz (ref.is_null closure))
+                  #,(if (i32.eqz (i32.eqz closure))
                         closure
                         #`(lambda ([nargs i32] [a0 eqref] [a1 eqref] [a2 eqref] [a3 eqref]) -> eqref
                             (if (i32.eq nargs #,(number n))
@@ -1397,15 +1391,15 @@
 
   ;; The name of id with suffix, as an identifier of this macro's, so no
   ;; other code can refer to it.
-  (func (hidden-name [id eqref] [suffix eqref]) -> eqref
+  (func (hidden-name [id i32] [suffix i32]) -> i32
     (k:datum->syntax #'here (k:string->symbol (k:string-append (k:symbol->string (k:syntax-e id)) suffix)) id))
 
-  (func (eqref-params [ps eqref]) -> eqref
+  (func (eqref-params [ps i32]) -> i32
     (if (k:null? ps) '() (k:cons #`[#,(k:car ps) eqref] (eqref-params (k:cdr ps)))))
 
   ;; Arguments i ... n - 1 of the call being made: each one of the first
   ;; four, or an extra one.
-  (func (arguments-from [i i32] [n i32]) -> eqref
+  (func (arguments-from [i i32] [n i32]) -> i32
     (if (i32.ge_u i n) (return '()))
     (k:cons (if (i32.lt_u i 4)
                 (nth (k:syntax->list #'(a0 a1 a2 a3)) i)
@@ -1413,26 +1407,26 @@
             (arguments-from (i32.add i 1) n)))
 
   ;; (lambda params body ...)
-  (func (substrate-lambda [stx eqref]) -> eqref
+  (func (substrate-lambda [stx i32]) -> i32
     (kernel-lambda-of stx '#f))
 
   ;; (case-lambda [params body ...] ...): a function with a clause per
   ;; number of arguments; a call runs the first clause that takes them.
-  (func (substrate-case-lambda [stx eqref]) -> eqref
+  (func (substrate-case-lambda [stx i32]) -> i32
     (kernel-lambda-of stx '#f))
 
   ;; (set! x e): the kernel's set!, which has no value, then #f.
-  (func (substrate-set! [stx eqref]) -> eqref
+  (func (substrate-set! [stx i32]) -> i32
     #`(begin (set! #,@(k:cdr (k:syntax->list stx))) '#f))
 
   ;; The first four arguments of a call, null where there are fewer.
-  (func (first-four [args eqref]) -> eqref
+  (func (first-four [args i32]) -> i32
     (let ([n (k:length args)])
       (if (i32.ge_u n 4) (return (take args 4)))
       (k:append args (take (k:syntax->list #'((ref.null eq) (ref.null eq) (ref.null eq) (ref.null eq)))
                            (i32.sub 4 n)))))
 
-  (func (temporaries [n i32]) -> eqref
+  (func (temporaries [n i32]) -> i32
     (let ([l '()] [i n])
       (block done
         (loop next
@@ -1442,10 +1436,10 @@
           (br next)))
       l))
 
-  (func (temporary-bindings [ts eqref] [args eqref]) -> eqref
+  (func (temporary-bindings [ts i32] [args i32]) -> i32
     (if (k:null? ts) '() (k:cons #`[#,(k:car ts) #,(k:car args)] (temporary-bindings (k:cdr ts) (k:cdr args)))))
 
-  (func (extra-stores [ts eqref] [i i32]) -> eqref
+  (func (extra-stores [ts i32] [i i32]) -> i32
     (if (k:null? ts) '() (k:cons #`(set-extra-arg #,(number i) #,(k:car ts)) (extra-stores (k:cdr ts) (i32.add i 1)))))
 
   ;; (#%app f arg ...): a kernel function taking that many arguments is
@@ -1455,7 +1449,7 @@
   ;; another number of arguments is applied as its value, whose code
   ;; reports the error. A head that is not a variable is evaluated once,
   ;; first.
-  (func (app [stx eqref]) -> eqref
+  (func (app [stx i32]) -> i32
     (let* ([parts (k:cdr (k:syntax->list stx))]
            [f (k:car parts)]
            [args (k:cdr parts)])
@@ -1466,13 +1460,13 @@
 
   ;; Variable f as a procedure, tested and cast, or the failure: a shape
   ;; the kernel knows, so that a known function's call is direct (spec 5.3).
-  (func (procedure-of [f eqref]) -> eqref
+  (func (procedure-of [f i32]) -> i32
     #`(if (ref.test (ref (procedure)) #,f) (ref.cast (ref (procedure)) #,f) (not-a-function)))
 
   ;; The application of procedure head to args: the number of arguments,
   ;; then the first four, null where there are fewer. The others go in
   ;; extra-args once every argument is evaluated.
-  (func (call-value [head eqref] [args eqref]) -> eqref
+  (func (call-value [head i32] [args i32]) -> i32
     (let ([n (k:length args)])
       (if (i32.le_u n 4) (return #`(#%app #,head #,(number n) #,@(first-four args))))
       (let ([ts (temporaries n)])
@@ -1480,51 +1474,51 @@
             #,@(extra-stores (drop-n ts 4) 0)
             (#%app #,head #,(number n) #,@(take ts 4))))))
 
-  (func (function-name? [f eqref]) -> i32
-    (if (k:identifier? f) (ref.eq (k:identifier-binding-kind f) 'function) 0))
+  (func (function-name? [f i32]) -> i32
+    (if (k:identifier? f) (i32.eq (k:identifier-binding-kind f) 'function) 0))
 
   ;; Whether function f takes n arguments. A call that gives it another
   ;; number calls its value, whose code reports the error when it runs.
-  (func (takes? [f eqref] [n i32]) -> i32
+  (func (takes? [f i32] [n i32]) -> i32
     (let ([sig (k:identifier-function-signature f)] [k 0])
       (block done
         (loop next
-          (br-if done (ref.eq (k:car sig) '->))
+          (br-if done (i32.eq (k:car sig) '->))
           (set! k (i32.add k 1))
           (set! sig (k:cdr sig))
           (br next)))
       (i32.eq k n)))
 
   ;; (#%datum literal) => 'literal
-  (func (datum [stx eqref]) -> eqref #`(quote #,(k:cadr (k:syntax->list stx))))
+  (func (datum [stx i32]) -> i32 #`(quote #,(k:cadr (k:syntax->list stx))))
 
   ;; (list e ...) => (cons e (cons ... '())): no call, no count of arguments.
   ;; list alone, a value, is the function list-function.
-  (func (list-form [stx eqref]) -> eqref
+  (func (list-form [stx i32]) -> i32
     (let ([parts (k:syntax->list stx)])
-      (if (ref.is_null parts) #'list-function (cons-chain (k:cdr parts)))))
+      (if (i32.eqz parts) #'list-function (cons-chain (k:cdr parts)))))
 
-  (func (cons-chain [es eqref]) -> eqref
+  (func (cons-chain [es i32]) -> i32
     (if (k:null? es) #''() #`(cons #,(k:car es) #,(cons-chain (k:cdr es)))))
   ;; ---- control ----
 
   ;; (if test then [else]): only #f is false.
-  (func (substrate-if [stx eqref]) -> eqref
+  (func (substrate-if [stx i32]) -> i32
     (let ([parts (k:syntax->list stx)])
       #`(if (ref.is_null #,(k:cadr parts))
             #,(if (i32.eq (k:length parts) 4) (k:car (k:cdddr parts)) #''#f)
             #,(k:caddr parts))))
 
-  (func (binding-names [bs eqref]) -> eqref
+  (func (binding-names [bs i32]) -> i32
     (if (k:null? bs) '() (k:cons (k:car (k:syntax->list (k:car bs))) (binding-names (k:cdr bs)))))
 
-  (func (binding-inits [bs eqref]) -> eqref
+  (func (binding-inits [bs i32]) -> i32
     (if (k:null? bs) '() (k:cons (k:cadr (k:syntax->list (k:car bs))) (binding-inits (k:cdr bs)))))
 
   ;; (let ([x e] ...) body ...), or (let name ([x e] ...) body ...), a
   ;; loop, whose lambda is located at the let. A variable holds any value:
   ;; it is an eqref, unless the binding writes its type, [x type e].
-  (func (substrate-let [stx eqref]) -> eqref
+  (func (substrate-let [stx i32]) -> i32
     (let ([parts (k:syntax->list stx)])
       (if (k:identifier? (k:cadr parts))
           (let* ([bs (k:syntax->list (k:caddr parts))]
@@ -1533,80 +1527,33 @@
       #`(let (#,@(eqref-bindings (k:syntax->list (k:cadr parts)))) #,@(k:cddr parts))))
 
   ;; (let* ([x e] ...) body ...): the kernel's, with each variable an eqref.
-  (func (substrate-let* [stx eqref]) -> eqref
+  (func (substrate-let* [stx i32]) -> i32
     (let ([parts (k:syntax->list stx)])
       #`(let* (#,@(eqref-bindings (k:syntax->list (k:cadr parts)))) #,@(k:cddr parts))))
 
   ;; Bindings bs, each [x e] as [x eqref e]; one that writes a type stays.
-  (func (eqref-bindings [bs eqref]) -> eqref
+  (func (eqref-bindings [bs i32]) -> i32
     (if (k:null? bs)
         '()
         (let ([b (k:syntax->list (k:car bs))])
           (k:cons (if (i32.eq (k:length b) 2) #`[#,(k:car b) eqref #,(k:cadr b)] (k:car bs))
                   (eqref-bindings (k:cdr bs))))))
 
-  (func (false-bindings [xs eqref]) -> eqref
+  (func (false-bindings [xs i32]) -> i32
     (if (k:null? xs) '() (k:cons #`[#,(k:car xs) '#f] (false-bindings (k:cdr xs)))))
 
-  (func (assignments [bs eqref]) -> eqref
+  (func (assignments [bs i32]) -> i32
     (if (k:null? bs)
         '()
         (let ([b (k:syntax->list (k:car bs))])
           (k:cons #`(set! #,(k:car b) #,(k:cadr b)) (assignments (k:cdr bs))))))
 
   ;; (letrec ([x e] ...) body ...): each e can refer to every x.
-  (func (letrec [stx eqref]) -> eqref
+  (func (letrec [stx i32]) -> i32
     (let* ([parts (k:syntax->list stx)] [bs (k:syntax->list (k:cadr parts))])
       #`(let (#,@(false-bindings (binding-names bs)))
           #,@(assignments bs)
           (let () #,@(k:cddr parts)))))
-
-  ;; (define-syntax (name stx) body ...): name bound to a transformer, a
-  ;; kernel lambda from syntax to syntax (spec 6.3) whose body is written
-  ;; in Substrate, so the module must take Substrate at phase 1 too, with
-  ;; (begin-for-syntax (require-unqualified substrate ".../substrate.sub")).
-  ;; (define-syntax name (lambda (stx) body ...)) is the same, and
-  ;; (define-syntax name f), f a function, is the kernel's. Any other
-  ;; (define-syntax name e) binds name to e's value, made a transformer if
-  ;; it is a procedure (as-transformer).
-  (func (substrate-define-syntax [stx eqref]) -> eqref
-    (let* ([parts (k:syntax->list stx)] [head (k:cadr parts)])
-      (if (k:identifier? head)
-          (let* ([rhs (k:caddr parts)] [fixed (fixed-lambda rhs)])
-            (if (i32.eqz (ref.is_null fixed))
-                (if (i32.eq (k:length (k:car fixed)) 1)
-                    (return (transformer-lambda head (k:car (k:car fixed)) (k:cdr fixed)))))
-            (return (if (k:identifier? rhs)
-                        #`(define-syntax #,head #,rhs)
-                        #`(define-syntax #,head (as-transformer #,rhs))))))
-      (let ([h (k:splice-list head)])
-        (transformer-lambda (k:car h) (k:cadr h) (k:cddr parts)))))
-
-  ;; (define-syntax name (lambda ([stx eqref]) -> eqref body ...)), the
-  ;; kernel's lambda, as transformer makes it: the kernel's forms mean the
-  ;; same at every phase, where a macro of this module's would not.
-  (func (transformer-lambda [name eqref] [stx eqref] [body eqref]) -> eqref
-    #`(define-syntax #,name (lambda ([#,stx eqref]) -> eqref (let () #,@body))))
-
-  ;; (transformer (stx) body ...): a transformer, a function from syntax
-  ;; to syntax (spec 6.3): the kernel's lambda, whose body is Substrate.
-  (func (transformer [stx eqref]) -> eqref
-    (let ([parts (k:syntax->list stx)])
-      (if (i32.eqz (if (k:pair? (k:cdr parts)) (k:pair? (k:cddr parts)) 0))
-          (k:raise-syntax-error '#f '"expected (transformer (stx) body ...)" stx))
-      (let ([ps (k:syntax->list (k:cadr parts))])
-        (if (i32.eqz (if (ref.is_null ps) 0 (if (k:pair? ps) (if (k:null? (k:cdr ps)) (k:identifier? (k:car ps)) 0) 0)))
-            (k:raise-syntax-error '#f '"expected one parameter, the syntax" (k:cadr parts)))
-        #`(lambda ([#,(k:car ps) eqref]) -> eqref (let () #,@(k:cddr parts))))))
-
-  ;; v as a transformer if it is a procedure, a function from syntax to
-  ;; syntax that calls it; else v itself.
-  (func (as-transformer [v eqref]) -> eqref
-    (if (ref.test (ref (closure (i32 eqref eqref eqref eqref -> eqref))) v)
-        (lambda ([stx eqref]) -> eqref
-          (#%app (ref.cast (ref (closure (i32 eqref eqref eqref eqref -> eqref))) v) 1 stx
-                 (ref.null eq) (ref.null eq) (ref.null eq)))
-        v))
 
   ;; (struct name (field ...) option ...): a field is an id or
   ;; [id #:mutable], and the option #:mutable makes every field mutable.
@@ -1615,7 +1562,7 @@
   ;; per mutable field. name is bound to a transformer (struct-transformer):
   ;; (name e ...) makes one, name alone is the constructor, and match reads
   ;; the struct's information from it. See structs, further on.
-  (func (substrate-struct [stx eqref]) -> eqref
+  (func (substrate-struct [stx i32]) -> i32
     (let* ([parts (k:syntax->list stx)]
            [name (k:cadr parts)]
            [specs (k:syntax->list (k:caddr parts))]
@@ -1627,7 +1574,7 @@
            [pred (named-after name '"" '"?")])
       (if (i32.eqz (k:identifier? name))
           (k:raise-syntax-error '#f '"expected (struct name (field ...) option ...)" stx))
-      (if (ref.is_null specs) (k:raise-syntax-error 'struct '"expected a list of fields" (k:caddr parts)))
+      (if (i32.eqz specs) (k:raise-syntax-error 'struct '"expected a list of fields" (k:caddr parts)))
       #`(begin
           (type T (sub final structure (struct (field type (ref null struct-type)) (field hash i32)
                                                #,@(field-types fields))))
@@ -1644,69 +1591,68 @@
   ;; (accessor ...) (field ...)), which transformer-env gives. A use
   ;; (name arg ...) is a call of the constructor, and name alone is the
   ;; constructor.
-  (type transformer-code (func (eqref eqref -> eqref)))
-  (func (struct-use [info eqref] [stx eqref]) -> eqref (type transformer-code)
+  (func (struct-use [info i32] [stx i32]) -> i32
     (let ([make (k:caddr (k:syntax->list info))])
       (if (k:identifier? stx)
           make
           (k:datum->syntax make (k:cons make (k:cdr (k:syntax->list stx))) stx))))
-  (func (struct-transformer [info eqref]) -> eqref (k:make-transformer (ref.func struct-use) info))
+  (func (struct-transformer [info i32]) -> i32 (k:make-transformer (func-index struct-use) info))
 
   ;; 1 if the options, after the fields, make every field mutable.
-  (func (struct-options [opts eqref]) -> i32
+  (func (struct-options [opts i32]) -> i32
     (if (k:null? opts) (return 0))
-    (if (i32.eqz (ref.eq (k:syntax-e (k:car opts)) '#:mutable))
+    (if (i32.eqz (i32.eq (k:syntax-e (k:car opts)) '#:mutable))
         (k:raise-syntax-error 'struct '"the only option is #:mutable" (k:car opts)))
     (drop (struct-options (k:cdr opts)))
     1)
 
   ;; A field spec's name: id, or the id of [id #:mutable].
-  (func (field-name [spec eqref]) -> eqref
+  (func (field-name [spec i32]) -> i32
     (if (k:identifier? spec) (return spec))
     (let ([l (k:syntax->list spec)])
-      (if (i32.eqz (if (ref.is_null l) 0
+      (if (i32.eqz (if (i32.eqz l) 0
                        (if (i32.eq (k:length l) 2)
-                           (if (k:identifier? (k:car l)) (ref.eq (k:syntax-e (k:cadr l)) '#:mutable) 0)
+                           (if (k:identifier? (k:car l)) (i32.eq (k:syntax-e (k:cadr l)) '#:mutable) 0)
                            0)))
           (k:raise-syntax-error 'struct '"expected a field: id or [id #:mutable]" spec))
       (k:car l)))
 
-  (func (struct-fields [specs eqref]) -> eqref
+  (func (struct-fields [specs i32]) -> i32
     (if (k:null? specs) '() (k:cons (field-name (k:car specs)) (struct-fields (k:cdr specs)))))
 
   ;; The wasm struct field for user field f: .f, so that no user field
   ;; is named as structure's own fields, type and hash, are. Kernel fields
   ;; are found by name, not by binding (spec 5.3).
-  (func (wasm-field [f eqref]) -> eqref (named-after f '"." '""))
+  (func (wasm-field [f i32]) -> i32 (named-after f '"." '""))
 
-  (func (field-types [fields eqref]) -> eqref
+  (func (field-types [fields i32]) -> i32
     (if (k:null? fields)
         '()
         (k:cons #`(field #,(wasm-field (k:car fields)) (mut eqref)) (field-types (k:cdr fields)))))
 
   ;; prefix, the name of id, then suffix, as an identifier with id's scopes.
-  (func (named-after [id eqref] [prefix eqref] [suffix eqref]) -> eqref
+  (func (named-after [id i32] [prefix i32] [suffix i32]) -> i32
     (k:datum->syntax id (k:string->symbol (k:string-append prefix (k:string-append (k:symbol->string (k:syntax-e id)) suffix))) id))
 
   ;; Whether v is an instance of the struct: a T made with descriptor D.
   ;; Testing for T, which is final, is cheap when it succeeds, where a test
   ;; for structure, T's supertype, is not.
-  (func (instance-test) -> eqref
+  (func (instance-test) -> i32
     #'(if (ref.test (ref T) v) (ref.eq (struct.get T type (ref.cast (ref T) v)) D) 0))
 
   ;; v as a T, which must be an instance of the struct, for function who.
-  (func (as-instance [who eqref]) -> eqref
+  (func (as-instance [who i32]) -> i32
     #`(if #,(instance-test) (ref.cast (ref T) v) (ref.cast (ref T) (structure-arg v D '#,who))))
 
   ;; The accessor of field spec of struct name: name-field.
-  (func (accessor-name [name eqref] [spec eqref]) -> eqref
+  (func (accessor-name [name i32] [spec i32]) -> i32
     (named-after (field-name spec) (k:string-append (k:symbol->string (k:syntax-e name)) '"-") '""))
 
-  (func (accessor-names [name eqref] [specs eqref]) -> eqref
+  (func (accessor-names [name i32] [specs i32]) -> i32
     (if (k:null? specs) '() (k:cons (accessor-name name (k:car specs)) (accessor-names name (k:cdr specs)))))
 
   ;; The accessor, and the mutator of a mutable field, for each field spec.
-  (func (accessors [name eqref] [specs eqref] [all-mutable i32] [i i32]) -> eqref
+  (func (accessors [name i32] [specs i32] [all-mutable i32] [i i32]) -> i32
     (if (k:null? specs) (return '()))
     (let* ([spec (k:car specs)]
            [field (field-name spec)]
@@ -1737,8 +1683,6 @@
 (define-syntax substrate-let* substrate-let*)
 (define-syntax letrec letrec)
 (define-syntax substrate-struct substrate-struct)
-(define-syntax substrate-define-syntax substrate-define-syntax)
-(define-syntax transformer transformer)
 
 ;; ---- functions -------------------------------------------------------------------------
 ;;
@@ -1754,17 +1698,17 @@
   (if (ref.eq a b) (return 1))
   (if (i32.or (i32.or (ref.is_null a) (ref.test (ref i31) a)) (i32.or (ref.is_null b) (ref.test (ref i31) b)))
       (return 0))
-  (if (k:char? a)
-      (return (if (k:char? b) (i32.eq (k:char->integer a) (k:char->integer b)) 0)))
-  (if (k:integer? a)
-      (return (if (k:integer? b)
-                  (if (i32.eq (k:integer-negative? a) (k:integer-negative? b))
-                      (i64.eq (k:integer-value a) (k:integer-value b))
+  (if (d:char? a)
+      (return (if (d:char? b) (i32.eq (d:char->integer a) (d:char->integer b)) 0)))
+  (if (d:integer? a)
+      (return (if (d:integer? b)
+                  (if (i32.eq (d:integer-negative? a) (d:integer-negative? b))
+                      (i64.eq (d:integer-value a) (d:integer-value b))
                       0)
                   0)))
-  (if (k:flonum? a)
-      (return (if (k:flonum? b)
-                  (i64.eq (i64.reinterpret_f64 (k:flonum-value a)) (i64.reinterpret_f64 (k:flonum-value b)))
+  (if (d:flonum? a)
+      (return (if (d:flonum? b)
+                  (i64.eq (i64.reinterpret_f64 (d:flonum-value a)) (i64.reinterpret_f64 (d:flonum-value b)))
                   0)))
   0)
 
@@ -1772,16 +1716,16 @@
 ;; equal contents.
 (func (equal [a eqref] [b eqref]) -> i32
   (if (eqv a b) (return 1))
-  (if (k:symbol? a) (return 0))
+  (if (d:symbol? a) (return 0))
   (if (ref.test (ref box) a)
       (return (if (ref.test (ref box) b)
                   (equal (struct.get box value (ref.cast (ref box) a)) (struct.get box value (ref.cast (ref box) b)))
                   0)))
-  (if (k:pair? a)
-      (return (if (k:pair? b)
-                  (if (equal (k:car a) (k:car b)) (equal (k:cdr a) (k:cdr b)) 0)
+  (if (d:pair? a)
+      (return (if (d:pair? b)
+                  (if (equal (d:car a) (d:car b)) (equal (d:cdr a) (d:cdr b)) 0)
                   0)))
-  (if (k:string? a) (return (if (k:string? b) (k:string=? a b) 0)))
+  (if (d:string? a) (return (if (d:string? b) (d:string=? a b) 0)))
   (if (ref.test (ref vector) a)
       (begin
         (if (i32.eqz (ref.test (ref vector) b)) (return 0))
@@ -1817,11 +1761,11 @@
 
 ;; ---- pairs and lists ----
 
-(func (pair-arg [p eqref] [who eqref]) #:inline -> eqref (if (k:pair? p) p (not-a-pair who p)))
+(func (pair-arg [p eqref] [who eqref]) #:inline -> eqref (if (d:pair? p) p (not-a-pair who p)))
 
 (func (not-a-pair [who eqref] [v eqref]) -> eqref (wrong-type who '"a pair" v))
 
-(func (list-arg [l eqref] [who eqref]) -> eqref (if (k:list? l) l (wrong-type who '"a list" l)))
+(func (list-arg [l eqref] [who eqref]) -> eqref (if (d:list? l) l (wrong-type who '"a list" l)))
 
 ;; The length of list l, for function who, and l reversed: each walks l
 ;; once, and stops with the error if it is not a list.
@@ -1829,22 +1773,22 @@
   (let ([n 0] [t l])
     (block done
       (loop next
-        (br-if done (i32.eqz (k:pair? t)))
+        (br-if done (i32.eqz (d:pair? t)))
         (set! n (i32.add n 1))
-        (set! t (k:cdr t))
+        (set! t (d:cdr t))
         (br next)))
-    (if (i32.eqz (k:null? t)) (drop (wrong-type who '"a list" l)))
+    (if (i32.eqz (d:null? t)) (drop (wrong-type who '"a list" l)))
     n))
 
 (func (reverse-list [l eqref] [who eqref]) -> eqref
   (let ([acc eqref '()] [t l])
     (block done
       (loop next
-        (br-if done (i32.eqz (k:pair? t)))
-        (set! acc (k:cons (k:car t) acc))
-        (set! t (k:cdr t))
+        (br-if done (i32.eqz (d:pair? t)))
+        (set! acc (d:cons (d:car t) acc))
+        (set! t (d:cdr t))
         (br next)))
-    (if (i32.eqz (k:null? t)) (drop (wrong-type who '"a list" l)))
+    (if (i32.eqz (d:null? t)) (drop (wrong-type who '"a list" l)))
     acc))
 
 ;; a's elements, then b, shared.
@@ -1852,19 +1796,19 @@
   (let ([r (reverse-list a '"append")])
     (block done
       (loop next
-        (br-if done (i32.eqz (k:pair? r)))
-        (set! b (k:cons (k:car r) b))
-        (set! r (k:cdr r))
+        (br-if done (i32.eqz (d:pair? r)))
+        (set! b (d:cons (d:car r) b))
+        (set! r (d:cdr r))
         (br next)))
     b))
 
-(substrate-define (cons a d) #:inline (k:cons a d))
+(substrate-define (cons a d) #:inline (d:cons a d))
 ;; The accessors test once and read with the kernel's unchecked accessors;
 ;; car-of and cdr-of are inline, so each accessor below is one call.
-(substrate-define (car p) #:inline (if (k:pair? p) (k:unsafe-car p) (not-a-pair 'car p)))
-(substrate-define (cdr p) #:inline (if (k:pair? p) (k:unsafe-cdr p) (not-a-pair 'cdr p)))
-(func (car-of [p eqref] [who eqref]) #:inline -> eqref (if (k:pair? p) (k:unsafe-car p) (not-a-pair who p)))
-(func (cdr-of [p eqref] [who eqref]) #:inline -> eqref (if (k:pair? p) (k:unsafe-cdr p) (not-a-pair who p)))
+(substrate-define (car p) #:inline (if (d:pair? p) (d:unsafe-car p) (not-a-pair 'car p)))
+(substrate-define (cdr p) #:inline (if (d:pair? p) (d:unsafe-cdr p) (not-a-pair 'cdr p)))
+(func (car-of [p eqref] [who eqref]) #:inline -> eqref (if (d:pair? p) (d:unsafe-car p) (not-a-pair who p)))
+(func (cdr-of [p eqref] [who eqref]) #:inline -> eqref (if (d:pair? p) (d:unsafe-cdr p) (not-a-pair who p)))
 (substrate-define (caar p) (car-of (car-of p 'caar) 'caar))
 (substrate-define (cadr p) (car-of (cdr-of p 'cadr) 'cadr))
 (substrate-define (cdar p) (cdr-of (car-of p 'cdar) 'cdar))
@@ -1872,23 +1816,23 @@
 (substrate-define (caddr p) (car-of (cdr-of (cdr-of p 'caddr) 'caddr) 'caddr))
 (substrate-define (cdddr p) (cdr-of (cdr-of (cdr-of p 'cdddr) 'cdddr) 'cdddr))
 (substrate-define (cadddr p) (car-of (cdr-of (cdr-of (cdr-of p 'cadddr) 'cadddr) 'cadddr) 'cadddr))
-(substrate-define (pair? x) #:inline (bool (k:pair? x)))
-(substrate-define (null? x) #:inline (bool (k:null? x)))
-(substrate-define (list? x) (bool (k:list? x)))
+(substrate-define (pair? x) #:inline (bool (d:pair? x)))
+(substrate-define (null? x) #:inline (bool (d:null? x)))
+(substrate-define (list? x) (bool (d:list? x)))
 (substrate-define (list-function . xs) xs)
-(substrate-define (length l) (k:fixnum (list-length l '"length")))
+(substrate-define (length l) (d:fixnum (list-length l '"length")))
 (substrate-define (reverse l) (reverse-list l '"reverse"))
 
 ;; The lists appended; the last is shared. They are appended from the
 ;; last, by loops, so any number of lists can be.
 (func (append-all [ls eqref]) -> eqref
-  (let ([l (k:reverse ls)] [acc eqref '()])
-    (set! acc (k:car l))
+  (let ([l (d:reverse ls)] [acc eqref '()])
+    (set! acc (d:car l))
     (block done
       (loop next
-        (set! l (k:cdr l))
-        (br-if done (k:null? l))
-        (set! acc (append-2 (k:car l) acc))
+        (set! l (d:cdr l))
+        (br-if done (d:null? l))
+        (set! acc (append-2 (d:car l) acc))
         (br next)))
     acc))
 
@@ -1896,7 +1840,7 @@
   (substrate-case-lambda
     [(a b) (append-2 a b)]
     [() '()]
-    [(a . rest) (append-all (k:cons a rest))]))
+    [(a . rest) (append-all (d:cons a rest))]))
 
 ;; Whether a and b match: by ref.eq (by 0), eqv? (1) or equal? (2). The
 ;; same reference matches; #f and a fixnum match nothing else.
@@ -1905,14 +1849,14 @@
   (if (i32.or (i32.eqz by) (i32.or (ref.is_null a) (ref.test (ref i31) a))) (return 0))
   (if (i32.eq by 1) (eqv a b) (equal a b)))
 
-(substrate-define (apply f first . more) (apply-list f (spread (k:cons first more))))
+(substrate-define (apply f first . more) (apply-list f (spread (d:cons first more))))
 
 ;; ---- numbers ----
 
-(substrate-define (number? x) (bool (i32.or (k:integer? x) (k:flonum? x))))
-(substrate-define (integer? x) (bool (k:integer? x)))
+(substrate-define (number? x) (bool (i32.or (d:integer? x) (d:flonum? x))))
+(substrate-define (integer? x) (bool (d:integer? x)))
 ;; An integer in the fixnum range, -2^30 to 2^30 - 1.
-(substrate-define (fixnum? x) (bool (k:fixnum? x)))
+(substrate-define (fixnum? x) (bool (d:fixnum? x)))
 
 (substrate-define + #:inline
   (substrate-case-lambda
@@ -1970,9 +1914,9 @@
   (drop (int-value a (if (i32.eq op 0) '"min" '"max")))
   (block done
     (loop next
-      (br-if done (i32.eqz (k:pair? l)))
-      (if (compare (if (i32.eq op 0) 1 0) a (k:car l)) (set! a (k:car l)))
-      (set! l (k:cdr l))
+      (br-if done (i32.eqz (d:pair? l)))
+      (if (compare (if (i32.eq op 0) 1 0) a (d:car l)) (set! a (d:car l)))
+      (set! l (d:cdr l))
       (br next)))
   a)
 
@@ -1994,7 +1938,7 @@
     [(a b) (bitwise 5 a b)]
     [() '0]
     [(a . more) (fold-op 5 (bitwise 5 a '0) more)]))
-(substrate-define (bitwise-not a) (k:integer (i64.xor (int-value a '"bitwise-not") -1)))
+(substrate-define (bitwise-not a) (d:integer (i64.xor (int-value a '"bitwise-not") -1)))
 (substrate-define (arithmetic-shift a k) (shift a k))
 
 (substrate-define number->string
@@ -2013,8 +1957,8 @@
 ;; letters, digits nor whitespace.
 
 (func (char-arg [c eqref] [who eqref]) -> i32
-  (if (i32.eqz (k:char? c)) (drop (wrong-type who '"a character" c)))
-  (k:char->integer c))
+  (if (i32.eqz (d:char? c)) (drop (wrong-type who '"a character" c)))
+  (d:char->integer c))
 
 ;; op: 0 <, 1 >, 2 <=, 3 >=, 4 =.
 (func (char-compare [op i32] [a eqref] [b eqref]) -> i32
@@ -2025,13 +1969,13 @@
     (if (i32.eq op 3) (return (i32.ge_u x y)))
     (i32.eq x y)))
 
-(substrate-define (char? x) (bool (k:char? x)))
-(substrate-define (char->integer c) (k:fixnum (char-arg c '"char->integer")))
+(substrate-define (char? x) (bool (d:char? x)))
+(substrate-define (char->integer c) (d:fixnum (char-arg c '"char->integer")))
 (substrate-define (integer->char n)
   (let ([x (int-value n '"integer->char")])
     (if (i32.or (i64.gt_u x 1114111) (i32.and (i64.ge_u x 55296) (i64.le_u x 57343)))
         (return (wrong-type '"integer->char" '"a Unicode scalar value" n)))
-    (k:integer->char (i32.wrap_i64 x))))
+    (d:integer->char (i32.wrap_i64 x))))
 (substrate-define char=?
   (substrate-case-lambda [(a b) (bool (char-compare 4 a b))] [(a . more) (chain 1 4 a more)]))
 (substrate-define char<?
@@ -2054,10 +1998,10 @@
     (bool (i32.or (i32.eq x 32) (i32.and (i32.ge_u x 9) (i32.le_u x 13))))))
 (substrate-define (char-upcase c)
   (let ([x (char-arg c '"char-upcase")])
-    (if (i32.and (i32.ge_u x 97) (i32.le_u x 122)) (k:integer->char (i32.sub x 32)) c)))
+    (if (i32.and (i32.ge_u x 97) (i32.le_u x 122)) (d:integer->char (i32.sub x 32)) c)))
 (substrate-define (char-downcase c)
   (let ([x (char-arg c '"char-downcase")])
-    (if (i32.and (i32.ge_u x 65) (i32.le_u x 90)) (k:integer->char (i32.add x 32)) c)))
+    (if (i32.and (i32.ge_u x 65) (i32.le_u x 90)) (d:integer->char (i32.add x 32)) c)))
 
 ;; ---- strings and symbols ----
 ;;
@@ -2068,17 +2012,17 @@
 ;; Languages above can index strings otherwise.
 
 (func (not-a-string [s eqref] [who eqref]) -> eqref (wrong-type who '"a string" s))
-(func (string-arg [s eqref] [who eqref]) #:inline -> eqref (if (k:string? s) s (not-a-string s who)))
+(func (string-arg [s eqref] [who eqref]) #:inline -> eqref (if (d:string? s) s (not-a-string s who)))
 
 ;; Bytewise, which for UTF-8 is by code point: -1, 0 or 1.
 (func (string-order [a eqref] [b eqref]) -> i32
-  (let ([n (k:string-length a)] [m (k:string-length b)] [i 0] [x 0] [y 0])
+  (let ([n (d:string-length a)] [m (d:string-length b)] [i 0] [x 0] [y 0])
     (block done
       (loop next
         (br-if done (i32.ge_u i n))
         (if (i32.ge_u i m) (return 1))
-        (set! x (k:string-byte a i))
-        (set! y (k:string-byte b i))
+        (set! x (d:string-byte a i))
+        (set! y (d:string-byte b i))
         (if (i32.lt_u x y) (return -1))
         (if (i32.gt_u x y) (return 1))
         (set! i (i32.add i 1))
@@ -2095,16 +2039,16 @@
     (i32.eqz o)))
 
 (func (not-a-symbol [v eqref] [who eqref]) -> eqref (wrong-type who '"a symbol" v))
-(func (symbol-arg [v eqref] [who eqref]) #:inline -> eqref (if (k:symbol? v) v (not-a-symbol v who)))
+(func (symbol-arg [v eqref] [who eqref]) #:inline -> eqref (if (d:symbol? v) v (not-a-symbol v who)))
 
 ;; Are symbols a and b in order by their names, compared as string<? does?
 (substrate-define (symbol<? a b)
-  (bool (i32.lt_s (string-order (k:symbol->string (symbol-arg a '"symbol<?"))
-                                (k:symbol->string (symbol-arg b '"symbol<?")))
+  (bool (i32.lt_s (string-order (d:symbol->string (symbol-arg a '"symbol<?"))
+                                (d:symbol->string (symbol-arg b '"symbol<?")))
                   0)))
 
-(substrate-define (string? x) (bool (k:string? x)))
-(substrate-define (symbol? x) (bool (k:symbol? x)))
+(substrate-define (string? x) (bool (d:string? x)))
+(substrate-define (symbol? x) (bool (d:symbol? x)))
 (substrate-define string=?
   (substrate-case-lambda [(a b) (bool (string-compare 4 a b))] [(a . more) (chain 2 4 a more)]))
 (substrate-define string<?
@@ -2119,9 +2063,9 @@
 (func (string-append-all [acc eqref] [l eqref]) -> eqref
   (block done
     (loop next
-      (br-if done (i32.eqz (k:pair? l)))
-      (set! acc (k:string-append acc (string-arg (k:car l) '"string-append")))
-      (set! l (k:cdr l))
+      (br-if done (i32.eqz (d:pair? l)))
+      (set! acc (d:string-append acc (string-arg (d:car l) '"string-append")))
+      (set! l (d:cdr l))
       (br next)))
   acc)
 
@@ -2129,37 +2073,37 @@
 (substrate-define (string-append . strings) (string-append-all '"" strings))
 
 (substrate-define (symbol->string x)
-  (if (i32.eqz (k:symbol? x)) (return (wrong-type '"symbol->string" '"a symbol" x)))
-  (k:symbol->string x))
-(substrate-define (string->symbol x) (k:string->symbol (string-arg x '"string->symbol")))
-(substrate-define (keyword? x) (bool (k:keyword? x)))
+  (if (i32.eqz (d:symbol? x)) (return (wrong-type '"symbol->string" '"a symbol" x)))
+  (d:symbol->string x))
+(substrate-define (string->symbol x) (d:string->symbol (string-arg x '"string->symbol")))
+(substrate-define (keyword? x) (bool (d:keyword? x)))
 (substrate-define (keyword->string k)
-  (if (i32.eqz (k:keyword? k)) (return (wrong-type '"keyword->string" '"a keyword" k)))
-  (k:keyword->string k))
-(substrate-define (string->keyword x) (k:string->keyword (string-arg x '"string->keyword")))
+  (if (i32.eqz (d:keyword? k)) (return (wrong-type '"keyword->string" '"a keyword" k)))
+  (d:keyword->string k))
+(substrate-define (string->keyword x) (d:string->keyword (string-arg x '"string->keyword")))
 
 (func (continuation-byte? [b i32]) -> i32 (i32.eq (i32.and b 192) 128))
 
 ;; Is byte offset i of s where a character starts, or its end?
 (func (char-start? [s eqref] [i i32]) -> i32
-  (if (i32.ge_u i (k:string-length s)) (return 1))
-  (i32.eqz (continuation-byte? (k:string-byte s i))))
+  (if (i32.ge_u i (d:string-length s)) (return 1))
+  (i32.eqz (continuation-byte? (d:string-byte s i))))
 
 (func (inside-char-error [who eqref] [k eqref]) -> eqref
-  (fail-format who '"byte ~s is inside a character" (k:cons k '())))
+  (fail-format who '"byte ~s is inside a character" (d:cons k '())))
 
 ;; Byte offset k of string s, for function who: from 0 to its length, where
 ;; a character starts.
 (func (char-offset [k eqref] [s eqref] [who eqref]) -> i32
-  (let ([i (bound k (k:string-length s) who)])
+  (let ([i (bound k (d:string-length s) who)])
     (if (i32.eqz (char-start? s i)) (drop (inside-char-error who k)))
     i))
 
-(func (continuation [s eqref] [i i32]) -> i32 (i32.and (k:string-byte s i) 63))
+(func (continuation [s eqref] [i i32]) -> i32 (i32.and (d:string-byte s i) 63))
 
 ;; The code point of the character at byte offset i of s.
 (func (decode-char [s eqref] [i i32]) -> i32
-  (let ([b (k:string-byte s i)])
+  (let ([b (d:string-byte s i)])
     (if (i32.lt_u b 128) (return b))
     (if (i32.lt_u b 224)
         (return (i32.or (i32.shl (i32.and b 31) 6) (continuation s (i32.add i 1)))))
@@ -2178,35 +2122,35 @@
 ;; The byte offsets of string x from start to end (#f: its start, its end),
 ;; for function who, as (start . end) fixnums.
 (func (string-range [x eqref] [start eqref] [end eqref] [who eqref]) -> eqref
-  (let* ([e (if (ref.is_null end) (k:string-length x) (char-offset end x who))]
+  (let* ([e (if (ref.is_null end) (d:string-length x) (char-offset end x who))]
          [b (if (ref.is_null start) 0 (char-offset start x who))])
     (if (i32.gt_u b e) (drop (index-error who start)))
-    (k:cons (k:fixnum b) (k:fixnum e))))
+    (d:cons (d:fixnum b) (d:fixnum e))))
 
 (func (substring* [s eqref] [start eqref] [end eqref] [who eqref]) -> eqref
-  (let* ([x (string-arg s who)] [r (string-range x start end who)] [builder (k:make-string-builder)])
-    (k:string-builder-add! builder x (k:fixnum-value (k:car r)) (k:fixnum-value (k:cdr r)))
-    (k:string-builder->string builder)))
+  (let* ([x (string-arg s who)] [r (string-range x start end who)] [builder (d:make-string-builder)])
+    (d:string-builder-add! builder x (d:fixnum-value (d:car r)) (d:fixnum-value (d:cdr r)))
+    (d:string-builder->string builder)))
 
 (func (string->list* [s eqref] [start eqref] [end eqref] [who eqref]) -> eqref
   (let* ([x (string-arg s who)] [r (string-range x start end who)]
-         [i (k:fixnum-value (k:car r))] [e (k:fixnum-value (k:cdr r))] [acc '()] [cp 0])
+         [i (d:fixnum-value (d:car r))] [e (d:fixnum-value (d:cdr r))] [acc '()] [cp 0])
     (block done
       (loop next
         (br-if done (i32.ge_u i e))
         (set! cp (decode-char x i))
-        (set! acc (k:cons (k:integer->char cp) acc))
+        (set! acc (d:cons (d:integer->char cp) acc))
         (set! i (i32.add i (utf8-length cp)))
         (br next)))
-    (k:reverse acc)))
+    (d:reverse acc)))
 
 (func (list->string* [chars eqref] [who eqref]) -> eqref
   (let ([p (new-port -1)] [l (list-arg chars who)])
     (block done
       (loop next
-        (br-if done (i32.eqz (k:pair? l)))
-        (out-char p (char-arg (k:car l) who))
-        (set! l (k:cdr l))
+        (br-if done (i32.eqz (d:pair? l)))
+        (out-char p (char-arg (d:car l) who))
+        (set! l (d:cdr l))
         (br next)))
     (port-string p)))
 
@@ -2267,11 +2211,11 @@
     (port-string p)))
 
 (func (string->bytes* [s eqref] [who eqref]) -> eqref
-  (let* ([x (string-arg s who)] [n (k:string-length x)] [b (array.new bytes 0 n)] [i 0])
+  (let* ([x (string-arg s who)] [n (d:string-length x)] [b (array.new bytes 0 n)] [i 0])
     (block done
       (loop next
         (br-if done (i32.ge_u i n))
-        (array.set bytes b i (k:string-byte x i))
+        (array.set bytes b i (d:string-byte x i))
         (set! i (i32.add i 1))
         (br next)))
     b))
@@ -2288,7 +2232,7 @@
     [(v err) (bytes->string* v err '#f '#f '"bytes->string/utf-8")]
     [(v err start) (bytes->string* v err start '#f '"bytes->string/utf-8")]
     [(v err start end) (bytes->string* v err start end '"bytes->string/utf-8")]))
-(substrate-define (char-utf-8-length c) (k:fixnum (utf8-length (char-arg c '"char-utf-8-length"))))
+(substrate-define (char-utf-8-length c) (d:fixnum (utf8-length (char-arg c '"char-utf-8-length"))))
 (substrate-define (string->list s) (string->list* s '#f '#f '"string->list"))
 (substrate-define (list->string chars) (list->string* chars '"list->string"))
 (substrate-define (string . chars) (list->string* chars '"string"))
@@ -2296,14 +2240,14 @@
 ;; Byte-indexed operations: the UTF-8 length, a byte, the character
 ;; starting at a byte index, and the substring between byte indexes.
 (substrate-define (string-utf-8-length s) #:inline
-  (k:fixnum (k:string-length (string-arg s 'string-utf-8-length))))
+  (d:fixnum (d:string-length (string-arg s 'string-utf-8-length))))
 (substrate-define (string-utf-8-byte s k) #:inline
   (let ([x (string-arg s 'string-utf-8-byte)])
-    (k:fixnum (k:string-byte x (index k (k:string-length x) 'string-utf-8-byte)))))
+    (d:fixnum (d:string-byte x (index k (d:string-length x) 'string-utf-8-byte)))))
 (substrate-define (string-ref/utf-8 s k)
-  (let* ([x (string-arg s '"string-ref/utf-8")] [i (index k (k:string-length x) '"string-ref/utf-8")])
+  (let* ([x (string-arg s '"string-ref/utf-8")] [i (index k (d:string-length x) '"string-ref/utf-8")])
     (if (i32.eqz (char-start? x i)) (return (inside-char-error '"string-ref/utf-8" k)))
-    (k:integer->char (decode-char x i))))
+    (d:integer->char (decode-char x i))))
 (substrate-define substring/utf-8
   (substrate-case-lambda
     [(s start end) (substring* s start end '"substring/utf-8")]
@@ -2343,8 +2287,8 @@
     (block done
       (loop next
         (br-if done (i32.ge_u i n))
-        (array.set vector v i (k:car l))
-        (set! l (k:cdr l))
+        (array.set vector v i (d:car l))
+        (set! l (d:cdr l))
         (set! i (i32.add i 1))
         (br next)))
     v))
@@ -2363,7 +2307,7 @@
   (substrate-case-lambda
     [(n fill) (array.new vector fill (count n '"make-vector"))]
     [(n) (array.new vector '#f (count n '"make-vector"))]))
-(substrate-define (vector-length v) (k:fixnum (array.len (vector-arg v '"vector-length"))))
+(substrate-define (vector-length v) (d:fixnum (array.len (vector-arg v '"vector-length"))))
 (substrate-define (vector-ref v k)
   (let ([a (vector-arg v '"vector-ref")])
     (array.get vector a (index k (array.len a) '"vector-ref"))))
@@ -2377,7 +2321,7 @@
       (loop next
         (br-if done (i32.eqz i))
         (set! i (i32.sub i 1))
-        (set! l (k:cons (array.get vector a i) l))
+        (set! l (d:cons (array.get vector a i) l))
         (br next)))
     l))
 (substrate-define (list->vector l) (list->vector* l '"list->vector"))
@@ -2426,29 +2370,29 @@
   (let ([n 0] [p l] [r (array.new bytes 0 0)] [i 0] [b (array.new bytes 0 0)])
     (block done
       (loop next
-        (br-if done (i32.eqz (k:pair? p)))
-        (set! n (i32.add n (array.len (bytes-arg (k:car p) '"bytes-append"))))
-        (set! p (k:cdr p))
+        (br-if done (i32.eqz (d:pair? p)))
+        (set! n (i32.add n (array.len (bytes-arg (d:car p) '"bytes-append"))))
+        (set! p (d:cdr p))
         (br next)))
     (set! r (array.new bytes 0 n))
     (block done
       (loop next
-        (br-if done (i32.eqz (k:pair? l)))
-        (set! b (ref.cast (ref bytes) (k:car l)))
+        (br-if done (i32.eqz (d:pair? l)))
+        (set! b (ref.cast (ref bytes) (d:car l)))
         (array.copy bytes bytes r i b 0 (array.len b))
         (set! i (i32.add i (array.len b)))
-        (set! l (k:cdr l))
+        (set! l (d:cdr l))
         (br next)))
     r))
 
 (substrate-define (bytes? x) (bool (ref.test (ref bytes) x)))
 (substrate-define (bytes . bs)
-  (let* ([n (k:length bs)] [r (array.new bytes 0 n)] [i 0])
+  (let* ([n (d:length bs)] [r (array.new bytes 0 n)] [i 0])
     (block done
       (loop next
         (br-if done (i32.ge_u i n))
-        (array.set bytes r i (byte-arg (k:car bs) '"bytes"))
-        (set! bs (k:cdr bs))
+        (array.set bytes r i (byte-arg (d:car bs) '"bytes"))
+        (set! bs (d:cdr bs))
         (set! i (i32.add i 1))
         (br next)))
     r))
@@ -2456,10 +2400,10 @@
   (substrate-case-lambda
     [(n) (array.new bytes 0 (count n '"make-bytes"))]
     [(n fill) (array.new bytes (byte-arg fill '"make-bytes") (count n '"make-bytes"))]))
-(substrate-define (bytes-length v) (k:fixnum (array.len (bytes-arg v '"bytes-length"))))
+(substrate-define (bytes-length v) (d:fixnum (array.len (bytes-arg v '"bytes-length"))))
 (substrate-define (bytes-ref v k)
   (let ([a (bytes-arg v '"bytes-ref")])
-    (k:fixnum (array.get_u bytes a (index k (array.len a) '"bytes-ref")))))
+    (d:fixnum (array.get_u bytes a (index k (array.len a) '"bytes-ref")))))
 (substrate-define (bytes-set! v k b)
   (let ([a (bytes-arg v '"bytes-set!")])
     (array.set bytes a (index k (array.len a) '"bytes-set!") (byte-arg b '"bytes-set!"))
@@ -2475,7 +2419,7 @@
       (loop next
         (br-if done (i32.eqz i))
         (set! i (i32.sub i 1))
-        (set! l (k:cons (k:fixnum (array.get_u bytes a i)) l))
+        (set! l (d:cons (d:fixnum (array.get_u bytes a i)) l))
         (br next)))
     l))
 (substrate-define (list->bytes l) (apply-list bytes (list-arg l '"list->bytes")))
@@ -2511,7 +2455,7 @@
 (func (structure-arg [v eqref] [d eqref] [who eqref]) -> (ref structure)
   (if (i32.eqz (structure-of? v d))
       (drop (wrong-type who
-                        (k:string-append '"a " (k:symbol->string (struct.get struct-type name (ref.cast (ref struct-type) d))))
+                        (d:string-append '"a " (d:symbol->string (struct.get struct-type name (ref.cast (ref struct-type) d))))
                         v)))
   (ref.cast (ref structure) v))
 
@@ -2533,38 +2477,38 @@
 
 (func (key-hash [k eqref] [kind i32] [who eqref]) -> i32
   (if (ref.is_null k) (return 0))
-  (if (k:fixnum? k) (return (mix (k:fixnum-value k))))
-  (if (k:symbol? k) (return (k:symbol-hash k)))
-  (if (k:keyword? k) (return (contents-hash (k:keyword->string k) 16 who)))
+  (if (d:fixnum? k) (return (mix (d:fixnum-value k))))
+  (if (d:symbol? k) (return (d:symbol-hash k)))
+  (if (d:keyword? k) (return (contents-hash (d:keyword->string k) 16 who)))
   (if (ref.test (ref structure) k) (return (struct.get structure hash (ref.cast (ref structure) k))))
   (if (ref.eq k '#t) (return 1))
-  (if (k:null? k) (return 2))
-  (if (k:char? k) (return (mix (i32.add (k:char->integer k) 1114112))))
-  (if (k:integer? k) (return (mix64 (k:integer-value k))))
-  (if (k:flonum? k) (return (mix64 (i64.reinterpret_f64 (k:flonum-value k)))))
+  (if (d:null? k) (return 2))
+  (if (d:char? k) (return (mix (i32.add (d:char->integer k) 1114112))))
+  (if (d:integer? k) (return (mix64 (d:integer-value k))))
+  (if (d:flonum? k) (return (mix64 (i64.reinterpret_f64 (d:flonum-value k)))))
   (if (i32.eq kind 2) (return (contents-hash k 16 who)))
   (drop (wrong-type who '"a key with a hash (a symbol, keyword, struct, number, character, boolean or ()); make-hash takes others" k))
   0)
 
 ;; The hash of k by its contents, looking at up to limit parts of it.
 (func (contents-hash [k eqref] [limit i32] [who eqref]) -> i32
-  (if (k:string? k)
-      (let ([h -2128831035] [i 0] [n (k:string-length k)])
+  (if (d:string? k)
+      (let ([h -2128831035] [i 0] [n (d:string-length k)])
         (block done
           (loop next
             (br-if done (i32.ge_u i n))
-            (set! h (i32.mul (i32.xor h (k:string-byte k i)) 16777619))
+            (set! h (i32.mul (i32.xor h (d:string-byte k i)) 16777619))
             (set! i (i32.add i 1))
             (br next)))
         (return h)))
-  (if (k:pair? k)
+  (if (d:pair? k)
       (let ([h 3] [n 0])
         (block done
           (loop next
-            (br-if done (i32.eqz (k:pair? k)))
+            (br-if done (i32.eqz (d:pair? k)))
             (br-if done (i32.ge_u n limit))
-            (set! h (i32.add (i32.mul h 31) (key-hash (k:car k) 2 who)))
-            (set! k (k:cdr k))
+            (set! h (i32.add (i32.mul h 31) (key-hash (d:car k) 2 who)))
+            (set! k (d:cdr k))
             (set! n (i32.add n 1))
             (br next)))
         (return (mix h))))
@@ -2673,13 +2617,13 @@
         (block chain-done
           (loop walk
             (br-if chain-done (ref.is_null e))
-            (set! chain (k:cons (if (i32.eqz part) (struct.get entry key e)
+            (set! chain (d:cons (if (i32.eqz part) (struct.get entry key e)
                                     (if (i32.eq part 1) (struct.get entry value e)
-                                        (k:cons (struct.get entry key e) (struct.get entry value e))))
+                                        (d:cons (struct.get entry key e) (struct.get entry value e))))
                                 chain))
             (set! e (struct.get entry next e))
             (br walk)))
-        (set! acc (k:append (k:reverse chain) acc))
+        (set! acc (d:append (d:reverse chain) acc))
         (br next)))
     acc))
 
@@ -2688,10 +2632,10 @@
   (let ([t (make-table kind)] [l (list-arg assocs who)] [p eqref '#f])
     (block done
       (loop next
-        (br-if done (i32.eqz (k:pair? l)))
-        (set! p (pair-arg (k:car l) who))
-        (drop (hash-set* (ref.cast (ref hashtable) t) (k:car p) (k:cdr p) who))
-        (set! l (k:cdr l))
+        (br-if done (i32.eqz (d:pair? l)))
+        (set! p (pair-arg (d:car l) who))
+        (drop (hash-set* (ref.cast (ref hashtable) t) (d:car p) (d:cdr p) who))
+        (set! l (d:cdr l))
         (br next)))
     t))
 
@@ -2701,7 +2645,7 @@
     '#f))
 
 (func (no-key-error [who eqref] [k eqref]) -> eqref
-  (fail-format who '"no value found for key ~s" (k:cons k '())))
+  (fail-format who '"no value found for key ~s" (d:cons k '())))
 
 ;; The failure argument, when a key is missing, is called if it is a
 ;; procedure and returned otherwise; with none, a missing key is an error.
@@ -2719,7 +2663,7 @@
 (substrate-define make-hash
   (substrate-case-lambda [() (make-table 2)] [(assocs) (make-table-from 2 assocs '"make-hash")]))
 (substrate-define (hash? x) (bool (ref.test (ref hashtable) x)))
-(substrate-define (hash-count t) (k:fixnum (struct.get hashtable count (table-arg t '"hash-count"))))
+(substrate-define (hash-count t) (d:fixnum (struct.get hashtable count (table-arg t '"hash-count"))))
 
 (substrate-define hash-ref
   (substrate-case-lambda
@@ -2765,9 +2709,9 @@
   (let ([l (table-walk (table-arg t '"hash-for-each") 2)])
     (block done
       (loop next
-        (br-if done (i32.eqz (k:pair? l)))
-        (drop (app f (k:car (k:car l)) (k:cdr (k:car l))))
-        (set! l (k:cdr l))
+        (br-if done (i32.eqz (d:pair? l)))
+        (drop (app f (d:car (d:car l)) (d:cdr (d:car l))))
+        (set! l (d:cdr l))
         (br next)))
     '#f))
 
@@ -2783,8 +2727,8 @@
 ;; procs, called with it.
 (substrate-define (call-with-handlers preds procs thunk)
   (let ([outer handlers])
-    (set! handlers (k:cons preds outer))
-    (try ([catch-ref k:exn (v e) (set! handlers outer) (handle v preds procs e)]
+    (set! handlers (d:cons preds outer))
+    (try ([catch-ref d:exn (v e) (set! handlers outer) (handle v preds procs e)]
           [catch-all-ref (e) (set! handlers outer) (throw-ref e)])
       (let ([r (app thunk)])
         (set! handlers outer)
@@ -2795,10 +2739,10 @@
 (func (handle [v eqref] [preds eqref] [hs eqref] [e exnref]) -> eqref
   (block none
     (loop next
-      (br-if none (i32.eqz (k:pair? preds)))
-      (if (i32.eqz (ref.is_null (app (k:car preds) v))) (return (app (k:car hs) v)))
-      (set! preds (k:cdr preds))
-      (set! hs (k:cdr hs))
+      (br-if none (i32.eqz (d:pair? preds)))
+      (if (i32.eqz (ref.is_null (app (d:car preds) v))) (return (app (d:car hs) v)))
+      (set! preds (d:cdr preds))
+      (set! hs (d:cdr hs))
       (br next)))
   (throw-ref e))
 
@@ -2811,52 +2755,12 @@
     (app post)
     r))
 
-;; Is v an exception: what error or a function's check raises, or a
-;; syntax error?
-(substrate-define (exn? v) (bool (i32.or (ref.test (ref exception) v) (k:syntax-error? v))))
+;; Is v an exception: what error or a function's check raises?
+(substrate-define (exn? v) (bool (ref.test (ref exception) v)))
 (substrate-define (exn-message v)
   (if (ref.test (ref exception) v) (return (struct.get exception message (ref.cast (ref exception) v))))
-  (if (k:syntax-error? v) (return (k:syntax-error-message v)))
   (wrong-type '"exn-message" '"an exception" v))
-(substrate-define (syntax-error? v) (bool (k:syntax-error? v)))
 
-;; ---- syntax ----
-;;
-;; The kernel module's functions (spec 2.3) as Substrate functions, for
-;; macros written in Substrate: predicates give #t or #f.
-
-(func (not-syntax [x eqref] [who eqref]) -> eqref (wrong-type who '"a syntax object" x))
-(func (syntax-arg [x eqref] [who eqref]) #:inline -> eqref (if (k:syntax? x) x (not-syntax x who)))
-
-(substrate-define (syntax? x) (bool (k:syntax? x)))
-(substrate-define (identifier? x) (bool (k:identifier? x)))
-(substrate-define (syntax-e x) (k:syntax-e (syntax-arg x '"syntax-e")))
-(substrate-define (syntax->list x) (k:syntax->list x))
-(substrate-define (syntax->datum x) (k:syntax->datum x))
-(substrate-define datum->syntax
-  (substrate-case-lambda
-    [(ctx d) (k:datum->syntax ctx d '#f)]
-    [(ctx d loc) (k:datum->syntax ctx d loc)]))
-(substrate-define (syntax-rewrap x e) (k:syntax-rewrap (syntax-arg x '"syntax-rewrap") e))
-;; (syntax-property x key) reads a property, and
-;; (syntax-property x key value) returns a copy of x with it set.
-(substrate-define syntax-property
-  (substrate-case-lambda
-    [(x key) (k:syntax-property (syntax-arg x '"syntax-property") key)]
-    [(x key value) (k:syntax-property-set (syntax-arg x '"syntax-property") key value)]))
-(substrate-define (free-identifier=? a b) (bool (k:free-identifier=? a b)))
-(substrate-define (syntax-local-value id) (k:syntax-local-value id))
-(substrate-define (identifier-binding-kind id) (k:identifier-binding-kind id))
-(substrate-define (local-expand x) (k:local-expand x))
-(substrate-define (transformer? x) (bool (k:transformer? x)))
-(substrate-define (transformer-env t)
-  (if (i32.eqz (k:transformer? t)) (return (wrong-type '"transformer-env" '"a transformer" t)))
-  (k:transformer-env t))
-(substrate-define (syntax-local-lift-definition form) (k:syntax-local-lift-definition form))
-(substrate-define raise-syntax-error
-  (substrate-case-lambda
-    [(name message) (k:raise-syntax-error name message '#f) '#f]
-    [(name message x) (k:raise-syntax-error name message x) '#f]))
 
 ;; ---- output and errors ----
 ;;
@@ -2909,7 +2813,7 @@
 (substrate-define (open-output-bytes) (new-port -1))
 (substrate-define (get-output-bytes p) (port-bytes (port-arg p '"get-output-bytes")))
 ;; The number of bytes written to bytes port p.
-(substrate-define (file-position p) (k:fixnum (struct.get port length (port-arg p '"file-position"))))
+(substrate-define (file-position p) (d:fixnum (struct.get port length (port-arg p '"file-position"))))
 ;; (proc port) with a new bytes port; what it writes there, as bytes.
 (substrate-define (call-with-output-bytes proc)
   (let ([p (new-port -1)])
@@ -2917,35 +2821,35 @@
     (port-bytes p)))
 
 ;; what is written as it is, not as a format string: it can hold a ~.
-(func (format-error [who eqref] [what eqref]) -> eqref (fail-format who '"~a" (k:cons what '())))
+(func (format-error [who eqref] [what eqref]) -> eqref (fail-format who '"~a" (d:cons what '())))
 
 ;; Write format string form with args to p: ~a displays the next argument,
 ;; ~s, ~v and ~e write it, ~% and ~n are newlines, and ~~ is ~.
 (func (out-format [p (ref port)] [who eqref] [form eqref] [args eqref])
-  (let ([n (k:string-length (string-arg form who))] [i 0] [b 0])
+  (let ([n (d:string-length (string-arg form who))] [i 0] [b 0])
     (block done
       (loop next
         (br-if done (i32.ge_u i n))
-        (set! b (k:string-byte form i))
+        (set! b (d:string-byte form i))
         (if (i32.ne b 126)
             (begin (out-byte p b) (set! i (i32.add i 1)) (br next)))
         (if (i32.ge_u (i32.add i 1) n) (drop (format-error who '"the format string ends in ~")))
-        (set! b (k:string-byte form (i32.add i 1)))
+        (set! b (d:string-byte form (i32.add i 1)))
         (if (i32.or (i32.eq b 126) (i32.or (i32.eq b 37) (i32.or (i32.eq b 110) (i32.eq b 78))))
             (out-byte p (if (i32.eq b 126) 126 10))
             (begin
-              (if (i32.eqz (k:pair? args))
+              (if (i32.eqz (d:pair? args))
                   (drop (format-error who '"the format string takes more arguments than it was given")))
               (if (i32.or (i32.eq b 97) (i32.eq b 65))
-                  (out-datum p (k:car args) 1)
+                  (out-datum p (d:car args) 1)
                   (if (i32.or (i32.or (i32.eq b 115) (i32.eq b 83))
                               (i32.or (i32.or (i32.eq b 118) (i32.eq b 86)) (i32.or (i32.eq b 101) (i32.eq b 69))))
-                      (out-datum p (k:car args) 0)
+                      (out-datum p (d:car args) 0)
                       (drop (format-error who '"the format string has an unknown directive"))))
-              (set! args (k:cdr args))))
+              (set! args (d:cdr args))))
         (set! i (i32.add i 2))
         (br next)))
-    (if (k:pair? args) (drop (format-error who '"the format string takes fewer arguments than it was given")))))
+    (if (d:pair? args) (drop (format-error who '"the format string takes fewer arguments than it was given")))))
 
 (substrate-define (format form . args)
   (let ([p (new-port -1)])
@@ -2962,21 +2866,21 @@
 ;; and the format string filled in, as format does.
 (substrate-define (error first . rest)
   (let ([p (new-port -1)])
-    (if (i32.and (k:symbol? first) (k:null? rest))
+    (if (i32.and (d:symbol? first) (d:null? rest))
         (begin (out-string p '"error: " 0) (out-datum p first 1))
-        (if (k:symbol? first)
+        (if (d:symbol? first)
             (begin
               (out-datum p first 1)
               (out-string p '": " 0)
-              (out-format p '"error" (k:car rest) (k:cdr rest)))
+              (out-format p '"error" (d:car rest) (d:cdr rest)))
             (begin
               (out-datum p first 1)
               (block done
                 (loop next
-                  (br-if done (i32.eqz (k:pair? rest)))
+                  (br-if done (i32.eqz (d:pair? rest)))
                   (out-byte p 32)
-                  (out-datum p (k:car rest) 0)
-                  (set! rest (k:cdr rest))
+                  (out-datum p (d:car rest) 0)
+                  (set! rest (d:cdr rest))
                   (br next))))))
     (fail-with p)))
 
@@ -3003,11 +2907,11 @@
 
 ;; String s's bytes, at address at.
 (func (store-string [s eqref] [at i32])
-  (let ([n (k:string-length s)] [i 0])
+  (let ([n (d:string-length s)] [i 0])
     (block done
       (loop next
         (br-if done (i32.ge_u i n))
-        (i32.store8 (i32.add at i) (k:string-byte s i))
+        (i32.store8 (i32.add at i) (d:string-byte s i))
         (set! i (i32.add i 1))
         (br next)))))
 
@@ -3046,7 +2950,7 @@
 
 ;; The bytes of the file path names, for function who.
 (func (read-file [path eqref] [who eqref]) -> (ref bytes)
-  (let* ([s (string-arg path who)] [pl (k:string-length s)] [at (i32.add scratch pl)] [n 0] [p (new-port -1)])
+  (let* ([s (string-arg path who)] [pl (d:string-length s)] [at (i32.add scratch pl)] [n 0] [p (new-port -1)])
     (scratch-reserve pl)
     (store-string s scratch)
     (set! n (host-read-file scratch pl at 0))
@@ -3060,7 +2964,7 @@
 
 ;; Can the file path names be read?
 (substrate-define (file-exists? path)
-  (let* ([p (string-arg path '"file-exists?")] [pl (k:string-length p)])
+  (let* ([p (string-arg path '"file-exists?")] [pl (d:string-length p)])
     (scratch-reserve pl)
     (store-string p scratch)
     (bool (i32.ge_s (host-read-file scratch pl (i32.add scratch pl) 0) 0))))
@@ -3072,7 +2976,7 @@
 ;; (display-to-file v path): write v, as display does, to the file path
 ;; names, creating or replacing it.
 (substrate-define (display-to-file v path)
-  (let* ([s (string-arg path '"display-to-file")] [pl (k:string-length s)] [p (new-port -1)] [n 0])
+  (let* ([s (string-arg path '"display-to-file")] [pl (d:string-length s)] [p (new-port -1)] [n 0])
     (out-datum p v 1)
     (set! n (struct.get port length p))
     (scratch-reserve (i32.add pl n))
@@ -3107,19 +3011,19 @@
 ;; a module it does not name links to the instance of that name. #f, or
 ;; the host's message if it fails.
 (func (instantiate* [name eqref] [code eqref] [imports eqref]) -> eqref
-  (let* ([s (string-arg name '"instantiate")] [nl (k:string-length s)] [a (bytes-arg code '"instantiate")]
+  (let* ([s (string-arg name '"instantiate")] [nl (d:string-length s)] [a (bytes-arg code '"instantiate")]
          [l (list-arg imports '"instantiate")] [m (new-port -1)] [at 0] [p (new-port -1)])
     ;; The map for the host: each module name, then its instance's, each
     ;; followed by a zero byte.
     (block done
       (loop next
-        (br-if done (i32.eqz (k:pair? l)))
-        (let ([e (pair-arg (k:car l) '"instantiate")])
-          (out-string m (string-arg (k:car e) '"instantiate") 0)
+        (br-if done (i32.eqz (d:pair? l)))
+        (let ([e (pair-arg (d:car l) '"instantiate")])
+          (out-string m (string-arg (d:car e) '"instantiate") 0)
           (out-byte m 0)
-          (out-string m (string-arg (k:cdr e) '"instantiate") 0)
+          (out-string m (string-arg (d:cdr e) '"instantiate") 0)
           (out-byte m 0))
-        (set! l (k:cdr l))
+        (set! l (d:cdr l))
         (br next)))
     (set! at (i32.add scratch (i32.add nl (array.len a))))
     (scratch-reserve (i32.add (i32.add nl (array.len a)) (struct.get port length m)))
@@ -3139,8 +3043,8 @@
 ;; The status (exit v) ends the program with: v if it is an integer from 1
 ;; to 255, and otherwise 0.
 (func (exit-status [v eqref]) -> i32
-  (if (i32.eqz (k:fixnum? v)) (return 0))
-  (let ([n (k:fixnum-value v)])
+  (if (i32.eqz (d:fixnum? v)) (return 0))
+  (let ([n (d:fixnum-value v)])
     (if (i32.and (i32.ge_s n 1) (i32.le_s n 255)) n 0)))
 
 (substrate-define exit
