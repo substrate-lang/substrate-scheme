@@ -1,5 +1,5 @@
 ;; Lifecycle: experimental. Closures and ownership for Substrate as the
-;; new compiler builds it (lib/languages/substrate), at compile time, in the C-like
+;; new compiler builds it (lib/substrate), at compile time, in the C-like
 ;; Lisp.
 ;; Substrate's values are values.sub's nodes, each with a count of owners
 ;; (dup and drop), so a program frees what it is done with, and the
@@ -58,13 +58,13 @@
 ;; pass makes are ctx's, the module of core.sub, so that they mean the
 ;; runtime's functions there.
 
-(require-unqualified c "../../../compiler/c/c.sub")
-(require-unqualified kd "../../../compiler/kernel.sub")
+(require-unqualified base "../../compiler/base/base.sub")
+(require-unqualified kd "../../compiler/kernel.sub")
 
 (provide convert-body convert-lambda infer-module! in-pass?)
 
-(memory from c)
-(table from c)
+(memory from base)
+(table from base)
 
 ;; Whether a body is being expanded for conversion.
 (define passing i32 0)

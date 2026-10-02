@@ -1,5 +1,5 @@
 ;; Lifecycle: experimental. Substrate as the new compiler builds it
-;; (lib/languages/substrate): lib/substrate.sub on core.sub here, whose values are
+;; (lib/substrate): lib/substrate.sub on core.sub here, whose values are
 ;; values.sub's nodes, owned and freed by the program. Its macros are written in the
 ;; C-like Lisp, on the kernel module's data, and a module written in
 ;; Substrate defines its macros with patterns, or in the C-like Lisp:
@@ -26,11 +26,11 @@
 
 (require-unqualified core "core.sub")
 (require rules "rules.sub" syntax-rules define-rules)
-(require pt "../../../compiler/c/patterns.sub" _ ... ?)
+(require pt "../../compiler/patterns.sub" _ ... ?)
 (begin-for-syntax
-  (require-unqualified c "../../../compiler/c/c.sub")
-  (require-unqualified kd "../../../compiler/kernel.sub")
-  (require sm "../../../compiler/c/c-syntax-match.sub" syntax-match _ ... ?))
+  (require-unqualified base "../../compiler/base/base.sub")
+  (require-unqualified kd "../../compiler/kernel.sub")
+  (require sm "../../compiler/base/syntax-match.sub" syntax-match _ ... ?))
 
 (provide (except-out (all-from-out core) call-with-handlers reverse) else when unless and or cond case do with-handlers reverse
          match _ ... ? [define-syntax substrate-define-syntax] syntax-rules
@@ -40,7 +40,7 @@
 ;; ---- forms -----------------------------------------------------------------------------
 ;;
 ;; Their transformers are C, at phase 1, and take syntax apart with
-;; syntax-match (compiler/c/c-syntax-match.sub).
+;; syntax-match (compiler/base/syntax-match.sub).
 
 (begin-for-syntax
   ;; else is a keyword of clauses, such as cond's and case's last, which
@@ -383,7 +383,7 @@
 ;; clauses are tried in order, and the first whose pattern the subject
 ;; matches binds the pattern's variables, and its body gives the value;
 ;; if none does, it raises an error that shows the subject. A pattern is
-;; syntax-match's (compiler/c/patterns.sub), on values, not syntax:
+;; syntax-match's (compiler/base/patterns.sub), on values, not syntax:
 ;;
 ;;   x                  anything, bound to x
 ;;   _                  anything
@@ -411,7 +411,7 @@
 ;; is left to matches?, which walks its description at run time.
 
 (begin-for-syntax
-  (require pt "../../../compiler/c/patterns.sub")
+  (require pt "../../compiler/patterns.sub")
 
   (define temps i32 0)
 

@@ -1,5 +1,5 @@
 ;; Lifecycle: experimental. The runtime of Substrate as the new compiler
-;; builds it (lib/languages/substrate): what Substrate's code runs with, written in
+;; builds it (lib/substrate): what Substrate's code runs with, written in
 ;; the C-like Lisp on values.sub's nodes, which are Substrate's values. A value is a
 ;; datum: a pair, symbol, keyword, string, integer, flonum or character,
 ;; #f (0), () or #t, all values.sub's; or a node of one of the kinds
@@ -37,10 +37,10 @@
 ;;
 ;; A string this module names a function or a kind by, for an error, is
 ;; a literal (lit, values.sub), made as the module starts.
-(require-unqualified c "../../../compiler/c/c.sub")
+(require-unqualified base "../../compiler/base/base.sub")
 (require-unqualified v "values.sub")
-(require numbers "../../../compiler/numbers.sub" read-decimal digits? digits-integer f64-bits)
-(require print "../../print.sub")
+(require numbers "../../compiler/numbers.sub" read-decimal digits? digits-integer f64-bits)
+(require print "../../compiler/print.sub")
 
 (provide exn
          ;; closures and calls
@@ -72,8 +72,8 @@
          ;; the host
          file->bytes file-exists? file->string display-to-file command-line-arguments instantiate-code exit-with)
 
-(memory from c)
-(table from c)
+(memory from base)
+(table from base)
 
 (import host-trap "host" "trap" (i32 i32 ->))
 (import host-write "host" "write" (i32 i32 i32 -> i32))
@@ -149,7 +149,7 @@
 (register-layouts!)
 
 (define (bool [x i32]) -> datum (if x true-node (cast datum 0)))
-(#%fact bool #'(foreign borrowed))
+(#%fact bool '(foreign borrowed))
 
 ;; ---- closures and calls ----
 
@@ -165,12 +165,12 @@
 ;; Slot i of new closure c holds v, which the closure now owns.
 (define (closure-set! [c datum] [i u32] [v datum])
   (set! (@ (-> (cast (ptr closure-block) (block-of c)) caps) i) v))
-(#%fact closure-set! #'(foreign void 2))
+(#%fact closure-set! '(foreign void 2))
 
 ;; Slot i of c: the closure's value, read where it is.
 (define (closure-ref [c datum] [i u32]) -> datum
   (@ (-> (cast (ptr closure-block) (block-of c)) caps) i))
-(#%fact closure-ref #'(foreign borrowed))
+(#%fact closure-ref '(foreign borrowed))
 
 (define (procedure? [v datum]) -> i32 (record-of? v kind-closure))
 
@@ -208,7 +208,7 @@
       (set! extra (cast (ptr datum) (realloc extra (* room 4))))
       (set! extra-room room)))
   (set! (@ extra i) v))
-(#%fact set-extra-arg! #'(foreign void 1))
+(#%fact set-extra-arg! '(foreign void 1))
 
 (define (extra-arg [i u32]) -> datum (@ extra i))
 
@@ -256,7 +256,7 @@
   (let ([d (new-record kind-exn (sizeof exn-block))])
     (set! (-> (cast (ptr exn-block) (block-of d)) message) message)
     d))
-(#%fact make-exn #'(foreign owned 0))
+(#%fact make-exn '(foreign owned 0))
 
 (define (exn? [v datum]) -> i32 (record-of? v kind-exn))
 
@@ -296,7 +296,7 @@
         (let ([m (message-of v)]) (buffer-add! (& b) (string-bytes m) (string-length m)))
         (begin (buffer-add-string! (& b) "uncaught exception: ") (write-value (& b) v 0)))
     (trap-with (& b))))
-(#%fact raise-value #'(foreign diverges 0))
+(#%fact raise-value '(foreign diverges 0))
 
 ;; Raise an exception whose message is b's bytes.
 (define (fail-with [b (ptr buffer)]) -> datum
@@ -320,15 +320,15 @@
     (out-format (& b) (lit "error") form args)
     (fail-with (& b))))
 
-(#%fact fail-format #'(foreign diverges))
+(#%fact fail-format '(foreign diverges))
 
 (define (wrong-type [who datum] [what datum] [v datum]) -> datum
   (fail-format who (lit "expected ~a, got ~s") (cons what (cons v nil))))
-(#%fact wrong-type #'(foreign diverges))
+(#%fact wrong-type '(foreign diverges))
 
 (define (index-error [who datum] [k datum]) -> datum
   (fail-format who (lit "index ~s is out of range") (cons k nil)))
-(#%fact index-error #'(foreign diverges))
+(#%fact index-error '(foreign diverges))
 
 (define (plural [n i32]) -> datum (if (== n 1) (lit "") (lit "s")))
 
@@ -338,32 +338,32 @@
   (fail-format (if (== name 0) (lit "lambda") name)
                (if rest (lit "expected at least ~a argument~a, got ~a") (lit "expected ~a argument~a, got ~a"))
                (cons (make-integer n) (cons (plural n) (cons (make-integer nargs) nil)))))
-(#%fact arity-error #'(foreign diverges))
+(#%fact arity-error '(foreign diverges))
 
 ;; A case-lambda named name has no clause that takes nargs arguments.
 (define (no-clause-error [name datum] [nargs i32]) -> datum
   (fail-format (if (== name 0) (lit "lambda") name) (lit "no clause takes ~a argument~a")
                (cons (make-integer nargs) (cons (plural nargs) nil))))
-(#%fact no-clause-error #'(foreign diverges))
+(#%fact no-clause-error '(foreign diverges))
 
 (define (not-a-function [v datum]) -> datum
   (let ([b (make-buffer)])
     (buffer-add-string! (& b) "called a value that is not a function: ")
     (write-value (& b) v 0)
     (fail-with (& b))))
-(#%fact not-a-function #'(foreign diverges))
+(#%fact not-a-function '(foreign diverges))
 
 (define (overflow) -> datum
   (let ([b (make-buffer)])
     (buffer-add-string! (& b) "integer overflow: integers are at most 64 bits")
     (fail-with (& b))))
-(#%fact overflow #'(foreign diverges))
+(#%fact overflow '(foreign diverges))
 
 (define (divide-by-zero) -> datum
   (let ([b (make-buffer)])
     (buffer-add-string! (& b) "division by zero")
     (fail-with (& b))))
-(#%fact divide-by-zero #'(foreign diverges))
+(#%fact divide-by-zero '(foreign diverges))
 
 ;; thunk's value. If it raises a value that one of preds is true of, the
 ;; value, once thunk has been left, of the procedure at the same place in
@@ -455,16 +455,16 @@
   (let ([d (new-record kind-box (sizeof box-block))])
     (set! (-> (cast (ptr box-block) (block-of d)) value) v)
     d))
-(#%fact make-box #'(foreign owned 0))
+(#%fact make-box '(foreign owned 0))
 
 (define (box? [v datum]) -> i32 (record-of? v kind-box))
 (define (unbox [b datum]) -> datum (-> (cast (ptr box-block) (block-of b)) value))
-(#%fact unbox #'(foreign borrowed))
+(#%fact unbox '(foreign borrowed))
 (define (set-box! [b datum] [v datum])
   (let ([p (cast (ptr box-block) (block-of b))])
     (drop (-> p value))
     (set! (-> p value) v)))
-(#%fact set-box! #'(foreign void 1))
+(#%fact set-box! '(foreign void 1))
 
 ;; ---- numbers ----
 
@@ -613,12 +613,12 @@
 (define (string-arg [s datum] [who datum]) -> datum
   (unless (string? s) (wrong-type who (lit "a string") s))
   s)
-(#%fact string-arg #'(foreign borrowed))
+(#%fact string-arg '(foreign borrowed))
 
 (define (symbol-arg [v datum] [who datum]) -> datum
   (unless (symbol? v) (wrong-type who (lit "a symbol") v))
   v)
-(#%fact symbol-arg #'(foreign borrowed))
+(#%fact symbol-arg '(foreign borrowed))
 
 ;; Bytewise, which for UTF-8 is by code point: -1, 0 or 1.
 (define (string-order [a datum] [b datum]) -> i32
@@ -652,7 +652,7 @@
 
 (define (inside-char-error [who datum] [k datum]) -> datum
   (fail-format who (lit "byte ~s is inside a character") (cons k nil)))
-(#%fact inside-char-error #'(foreign diverges))
+(#%fact inside-char-error '(foreign diverges))
 
 ;; Index k of n elements, for function who; bound-of allows n too.
 (define (index-of [k datum] [n u32] [who datum]) -> u32
@@ -792,12 +792,12 @@
         (drop fill)
         (for ([i u32 0]) (< i n) (+= i 1) (set! (@ (-> b items) i) (if (== i 0) fill (dup fill)))))
     d))
-(#%fact make-vector #'(foreign owned 1))
+(#%fact make-vector '(foreign owned 1))
 
 (define (vector-arg [v datum] [who datum]) -> datum
   (unless (vector? v) (wrong-type who (lit "a vector") v))
   v)
-(#%fact vector-arg #'(foreign borrowed))
+(#%fact vector-arg '(foreign borrowed))
 
 (define (vector-length [v datum]) -> u32 (-> (cast (ptr vector-block) (block-of v)) n))
 (define (vector-item [v datum] [i u32]) -> datum (@ (-> (cast (ptr vector-block) (block-of v)) items) i))
@@ -807,7 +807,7 @@
   (let ([b (cast (ptr vector-block) (block-of v))])
     (drop (@ (-> b items) i))
     (set! (@ (-> b items) i) x)))
-(#%fact vector-set! #'(foreign void 2))
+(#%fact vector-set! '(foreign void 2))
 
 (define (list->vector [l datum] [who datum]) -> datum
   (let ([n u32 0] [t l] [v datum 0] [i u32 0])
@@ -834,7 +834,7 @@
     (if (== n 0)
         (drop x)
         (for ([i u32 0]) (< i n) (+= i 1) (vector-set! v i (if (== i 0) x (dup x)))))))
-(#%fact vector-fill! #'(foreign void 1))
+(#%fact vector-fill! '(foreign void 1))
 
 (define (vector-copy [v datum] [s datum] [e datum] [who datum]) -> datum
   (let* ([a (vector-arg v who)]
@@ -860,7 +860,7 @@
 (define (bytes-arg [v datum] [who datum]) -> datum
   (unless (bytes? v) (wrong-type who (lit "a byte string") v))
   v)
-(#%fact bytes-arg #'(foreign borrowed))
+(#%fact bytes-arg '(foreign borrowed))
 
 (define (bytes-length [v datum]) -> u32 (-> (cast (ptr bytes-block) (block-of v)) n))
 (define (bytes-data [v datum]) -> (ptr u8) (cast (ptr u8) (-> (cast (ptr bytes-block) (block-of v)) data)))
@@ -946,10 +946,10 @@
     (set! (-> b fields) fields)
     (set! (-> b n) (length fields))
     d))
-(#%fact make-struct-type #'(foreign owned 0 1))
+(#%fact make-struct-type '(foreign owned 0 1))
 
 (define (struct-type-name [t datum]) -> datum (-> (cast (ptr type-block) (block-of t)) name))
-(#%fact struct-type-name #'(foreign borrowed))
+(#%fact struct-type-name '(foreign borrowed))
 
 (define hash-counter u32 0)
 
@@ -965,7 +965,7 @@
     (set! (-> b hash) (fresh-hash))
     (set! (-> b n) n)
     d))
-(#%fact make-struct #'(foreign owned 0))
+(#%fact make-struct '(foreign owned 0))
 
 (define (struct? [v datum]) -> i32 (record-of? v kind-struct))
 
@@ -977,7 +977,7 @@
   (unless (struct-of? v t)
     (wrong-type who (string-append (lit "a ") (symbol->string (struct-type-name t))) v))
   v)
-(#%fact struct-arg #'(foreign borrowed))
+(#%fact struct-arg '(foreign borrowed))
 
 (define (struct-ref [v datum] [i u32]) -> datum (dup (@ (-> (cast (ptr struct-block) (block-of v)) fields) i)))
 ;; Field i takes x, dropping what it held; in a new struct, whose fields
@@ -986,14 +986,14 @@
   (let ([b (cast (ptr struct-block) (block-of v))])
     (drop (@ (-> b fields) i))
     (set! (@ (-> b fields) i) x)))
-(#%fact struct-set! #'(foreign void 2))
+(#%fact struct-set! '(foreign void 2))
 (define (struct-init! [v datum] [i u32] [x datum])
   (set! (@ (-> (cast (ptr struct-block) (block-of v)) fields) i) x))
-(#%fact struct-init! #'(foreign void 2))
+(#%fact struct-init! '(foreign void 2))
 ;; v is not a struct of type t: the error, for an accessor who.
 (define (not-a-struct [v datum] [t datum] [who datum]) -> datum
   (wrong-type who (string-append (lit "a ") (symbol->string (struct-type-name t))) v))
-(#%fact not-a-struct #'(foreign diverges))
+(#%fact not-a-struct '(foreign diverges))
 (define (struct-hash [v datum]) -> u32 (-> (cast (ptr struct-block) (block-of v)) hash))
 
 ;; ---- hash tables ----
@@ -1141,14 +1141,14 @@
     (if (!= e2 0)
         (begin (drop (-> e2 value)) (set! (-> e2 value) v) (drop k))
         (add-entry b k h v))))
-(#%fact hash-update-value! #'(foreign void 1))
+(#%fact hash-update-value! '(foreign void 1))
 
 (define (hash-set-value! [t datum] [k datum] [v datum] [who datum])
   (let* ([b (table-arg t who)] [h (key-hash k (-> b kind) who)] [e (find-entry b k h)])
     (if (!= e 0)
         (begin (drop (-> e value)) (set! (-> e value) v) (drop k))
         (add-entry b k h v))))
-(#%fact hash-set-value! #'(foreign void 1 2))
+(#%fact hash-set-value! '(foreign void 1 2))
 
 (define (free-entry [e (ptr entry)])
   (drop (-> e key))
@@ -1234,16 +1234,16 @@
 
 ;; The standard ports, for kernel code, which cannot read a C global.
 (define (stdout-port) -> datum stdout)
-(#%fact stdout-port #'(foreign borrowed))
+(#%fact stdout-port '(foreign borrowed))
 (define (stderr-port) -> datum stderr)
-(#%fact stderr-port #'(foreign borrowed))
+(#%fact stderr-port '(foreign borrowed))
 
 (define (port? [v datum]) -> i32 (record-of? v kind-port))
 
 (define (port-arg [v datum] [who datum]) -> datum
   (unless (port? v) (wrong-type who (lit "an output port") v))
   v)
-(#%fact port-arg #'(foreign borrowed))
+(#%fact port-arg '(foreign borrowed))
 
 (define (port-buffer [p datum]) -> (ptr buffer) (& (-> (cast (ptr port-block) (block-of p)) buf)))
 (define (port-fd [p datum]) -> i32 (-> (cast (ptr port-block) (block-of p)) fd))
@@ -1362,7 +1362,7 @@
 
 ;; what is written as it is, not as a format string: it can hold a ~.
 (define (format-error [who datum] [what datum]) -> datum (fail-format who (lit "~a") (cons what nil)))
-(#%fact format-error #'(foreign diverges))
+(#%fact format-error '(foreign diverges))
 
 ;; Write format string form with args into b: ~a displays the next
 ;; argument, ~s, ~v and ~e write it, ~% and ~n are newlines, and ~~ is ~.
@@ -1514,6 +1514,6 @@
     (host-exit (if (and (>= n 1) (<= n 255)) (cast i32 n) 0))))
 
 ;; The functions that never return (lower.sub).
-(#%fact error-value #'(foreign diverges))
-(#%fact host-error #'(foreign diverges))
-(#%fact exit-with #'(foreign diverges))
+(#%fact error-value '(foreign diverges))
+(#%fact host-error '(foreign diverges))
+(#%fact exit-with '(foreign diverges))

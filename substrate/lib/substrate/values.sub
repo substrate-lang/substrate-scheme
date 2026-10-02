@@ -1,5 +1,5 @@
 ;; Lifecycle: experimental. Substrate's values, as the new compiler
-;; builds Substrate (lib/languages/substrate): written in the C-like Lisp, in the
+;; builds Substrate (lib/substrate): written in the C-like Lisp, in the
 ;; memory the program shares, owned and freed by the program, whose code
 ;; (lower.sub) drops the last owner's reference. The kernel module (compiler/kernel.sub) keeps the
 ;; compiler's data, which these never are: Substrate does not run at
@@ -41,9 +41,9 @@
 ;; datum d, made once as the module starts, permanent; (lit d), in C
 ;; code, is the same, read as a C variable. A fixnum, a character, #f,
 ;; () or #t is in place.
-(require-unqualified c "../../../compiler/c/c.sub")
-(require numbers "../../../compiler/numbers.sub" f64-bits bits-f64 flonum-digits)
-(require print "../../print.sub")
+(require-unqualified base "../../compiler/base/base.sub")
+(require numbers "../../compiler/numbers.sub" f64-bits bits-f64 flonum-digits)
+(require print "../../compiler/print.sub")
 
 (provide datum node
          ;; nodes and owners
@@ -70,8 +70,8 @@
          write-to write-datum buffer-add-utf-8!
          ;; quoted data
          quote quasiquote lit)
-(memory from c)
-(table from c)
+(memory from base)
+(table from base)
 
 (import host-trap "host" "trap" (i32 i32 ->))
 
@@ -95,15 +95,15 @@
 
 ;; Is d a node: neither #f, a fixnum nor a character? Inline, on the i32.
 (func (node-datum? [d i32]) #:inline -> i32 (if (i32.and d 3) 0 (i32.ne d 0)))
-(#%fact node-datum? #'(foreign raw))
+(#%fact node-datum? '(foreign raw))
 (func (fixnum-datum? [d i32]) #:inline -> i32 (i32.and d 1))
-(#%fact fixnum-datum? #'(foreign raw))
+(#%fact fixnum-datum? '(foreign raw))
 (func (char-datum? [d i32]) #:inline -> i32 (i32.eq (i32.and d 3) 2))
-(#%fact char-datum? #'(foreign raw))
+(#%fact char-datum? '(foreign raw))
 ;; Is d a node of this tag?
 (func (node-tagged? [d i32] [tag i32]) #:inline -> i32
   (if (i32.and d 3) 0 (if d (i32.eq (i32.and (i32.load d) 255) tag) 0)))
-(#%fact node-tagged? #'(foreign raw))
+(#%fact node-tagged? '(foreign raw))
 
 ;; For C code, the same as forms (below): (node? d), (tagged? d tag),
 ;; (pair? d), (null? d), (symbol? d), (keyword? d), (string? d),
@@ -163,7 +163,7 @@
   (let ([d (cast datum (alloc-bytes n))])
     (set! (-> d w) (bit-or 256 tag))
     d))
-(#%fact alloc-node #'(foreign owned))
+(#%fact alloc-node '(foreign owned))
 
 ;; The same, inline, for code the lowering makes: the class's list read
 ;; where it is, alloc-node when it is empty.
@@ -176,7 +176,7 @@
                 (begin (i32.store slot (i32.load h 4)) (i32.store h (i32.or 256 tag)) h)
                 (alloc-node n tag))))
         (alloc-node n tag))))
-(#%fact alloc-inline #'(foreign owned))
+(#%fact alloc-inline '(foreign owned))
 
 ;; How many counted nodes of the classes are in use: handed out and
 ;; neither free nor permanent. What a program can leak.
@@ -188,7 +188,7 @@
           (-= n 1)
           (set! p (@ (cast (ptr u32) p) 1)))))
     (cast i32 n)))
-(#%fact live-nodes #'(foreign raw))
+(#%fact live-nodes '(foreign raw))
 
 ;; ---- layouts and droppers ----
 ;;
@@ -261,13 +261,13 @@
           d
           (let ([w (i32.load d)])
             (if (i32.lt_u w 4294967040) (begin (i32.store d (i32.add w 256)) d) d)))))
-(#%fact dup-inline #'(foreign owned))
+(#%fact dup-inline '(foreign owned))
 (define (dup [d datum]) -> datum
   (when (node? d)
     (let ([w (-> d w)])
       (when (< w permanent-base) (set! (-> d w) (+ w 256)))))
   d)
-(#%fact dup #'(foreign owned))
+(#%fact dup '(foreign owned))
 
 ;; d's owner gone: counted down, or at the last owner freed, with what
 ;; it holds dropped (free-node!).
@@ -280,24 +280,24 @@
                 (if (i32.lt_u w 512)
                     (if (i32.and w 255) (free-node! d) (free-pair! d))
                     (i32.store d (i32.sub w 256))))))))
-(#%fact drop-inline #'(foreign void 0))
+(#%fact drop-inline '(foreign void 0))
 (define (drop [d datum])
   (when (node? d)
     (let ([w (-> d w)])
       (when (< w permanent-base)
         (if (< w 512) (free-node! d) (set! (-> d w) (- w 256)))))))
-(#%fact drop #'(foreign void 0))
+(#%fact drop '(foreign void 0))
 
 ;; Is node d owned once, so that its owner may reuse or free it?
 (func (unique-cell? [d i32]) #:inline -> i32 (i32.lt_u (i32.load d) 512))
-(#%fact unique-cell? #'(foreign raw))
+(#%fact unique-cell? '(foreign raw))
 
 ;; d a pair owned once, its node to the pairs' list without its fields
 ;; dropped, which its owner has taken.
 (func (free-pair-shell! [d i32]) #:inline
   (i32.store d (i32.load node-free 12) 4)
   (i32.store node-free d 12))
-(#%fact free-pair-shell! #'(foreign void))
+(#%fact free-pair-shell! '(foreign void))
 
 ;; The nodes to drop, those a freed node held: a stack, since a node may
 ;; hold many.
@@ -343,7 +343,7 @@
               (begin (-= drop-top 1) (set! u (@ drop-stack drop-top)))
               (set! more 0)))
         (set! dropping 0))))
-(#%fact free-node! #'(foreign void 0))
+(#%fact free-node! '(foreign void 0))
 
 ;; Pair d, whose last owner is gone, freed, and the chain of pairs with
 ;; one owner after it: the common case of free-node!, without its stack.
@@ -366,7 +366,7 @@
               (cond [(>= wb 512) (set! (@ (cast (ptr u32) b) 0) (- wb 256))]
                     [(== (bit-and wb 255) 0) (set! u (cast (ptr u32) b))]
                     [else (free-node! (cast datum b))]))))))))
-(#%fact free-pair! #'(foreign void 0))
+(#%fact free-pair! '(foreign void 0))
 
 ;; Node u, no pair, with header w, freed: a string, integer or flonum at
 ;; once, one of the runtime's by its layout or its dropper.
@@ -397,7 +397,7 @@
         (drop (permanent! (cast datum (@ p 1))))
         (drop (permanent! (cast datum (@ p 2)))))))
   d)
-(#%fact permanent! #'(foreign borrowed))
+(#%fact permanent! '(foreign borrowed))
 
 (define (fail [message (ptr u8)]) -> datum
   (host-trap (cast i32 message) (strlen message))
@@ -407,21 +407,21 @@
 
 (func (pair-cell? [d i32]) #:inline -> i32
   (if (i32.and d 3) 0 (if d (i32.eqz (i32.and (i32.load d) 255)) 0)))
-(#%fact pair-cell? #'(foreign raw))
+(#%fact pair-cell? '(foreign raw))
 (func (null-cell? [d i32]) #:inline -> i32 (i32.eq d %nil))
-(#%fact null-cell? #'(foreign raw))
+(#%fact null-cell? '(foreign raw))
 (func (true-value) #:inline -> i32 %true)
-(#%fact true-value #'(foreign free))
+(#%fact true-value '(foreign free))
 (func (null-value) #:inline -> i32 %nil)
-(#%fact null-value #'(foreign free))
+(#%fact null-value '(foreign free))
 ;; The value of a quoted datum's global g, permanent: a value that needs
 ;; no counting (lower.sub).
 (func (literal-value [g i32]) #:inline -> i32 g)
-(#%fact literal-value #'(foreign free))
+(#%fact literal-value '(foreign free))
 (func (pair-car [d i32]) #:inline -> i32 (i32.load d 4))
-(#%fact pair-car #'(foreign borrowed))
+(#%fact pair-car '(foreign borrowed))
 (func (pair-cdr [d i32]) #:inline -> i32 (i32.load d 8))
-(#%fact pair-cdr #'(foreign borrowed))
+(#%fact pair-cdr '(foreign borrowed))
 
 ;; A pair of a and d, which it now owns: inline from the pairs' list,
 ;; class 3, else cons, which fills the list.
@@ -435,35 +435,35 @@
           (i32.store h d 8)
           h)
         (cons a d))))
-(#%fact cons-inline #'(foreign owned 0 1))
+(#%fact cons-inline '(foreign owned 0 1))
 
 (define (cons [a datum] [d datum]) -> datum
   (let ([p (alloc-node 12 tag-pair)])
     (set! (@ (cast (ptr u32) p) 1) (cast u32 a))
     (set! (@ (cast (ptr u32) p) 2) (cast u32 d))
     p))
-(#%fact cons #'(foreign owned 0 1))
+(#%fact cons '(foreign owned 0 1))
 
 (define (car [p datum]) -> datum (if (pair? p) (cast datum (@ (cast (ptr u32) p) 1)) (fail "expected a pair")))
-(#%fact car #'(foreign borrowed))
+(#%fact car '(foreign borrowed))
 (define (cdr [p datum]) -> datum (if (pair? p) (cast datum (@ (cast (ptr u32) p) 2)) (fail "expected a pair")))
-(#%fact cdr #'(foreign borrowed))
+(#%fact cdr '(foreign borrowed))
 (define (cadr [p datum]) -> datum (car (cdr p)))
-(#%fact cadr #'(foreign borrowed))
+(#%fact cadr '(foreign borrowed))
 (define (cddr [p datum]) -> datum (cdr (cdr p)))
-(#%fact cddr #'(foreign borrowed))
+(#%fact cddr '(foreign borrowed))
 (define (caddr [p datum]) -> datum (car (cddr p)))
-(#%fact caddr #'(foreign borrowed))
+(#%fact caddr '(foreign borrowed))
 (define (cdddr [p datum]) -> datum (cdr (cddr p)))
-(#%fact cdddr #'(foreign borrowed))
+(#%fact cdddr '(foreign borrowed))
 (define (cadddr [p datum]) -> datum (car (cdddr p)))
-(#%fact cadddr #'(foreign borrowed))
+(#%fact cadddr '(foreign borrowed))
 ;; The pair's field replaced by d, which it now owns; the one it held is
 ;; the caller's to drop first.
 (define (set-car! [p datum] [d datum]) (if (pair? p) (set! (@ (cast (ptr u32) p) 1) (cast u32 d)) (drop (fail "expected a pair"))))
-(#%fact set-car! #'(foreign void 1))
+(#%fact set-car! '(foreign void 1))
 (define (set-cdr! [p datum] [d datum]) (if (pair? p) (set! (@ (cast (ptr u32) p) 2) (cast u32 d)) (drop (fail "expected a pair"))))
-(#%fact set-cdr! #'(foreign void 1))
+(#%fact set-cdr! '(foreign void 1))
 
 (define (list? [d datum]) -> i32
   (while (pair? d) (set! d (cdr d)))
@@ -479,7 +479,7 @@
   (let ([r nil])
     (while (pair? l) (set! r (cons (dup (car l)) r)) (set! l (cdr l)))
     r))
-(#%fact reverse #'(foreign owned))
+(#%fact reverse '(foreign owned))
 
 ;; a's elements, with references of the list's own, then b, which the
 ;; list is given.
@@ -491,26 +491,26 @@
         (set! b r)
         (set! r next)))
     b))
-(#%fact append #'(foreign owned 1))
+(#%fact append '(foreign owned 1))
 
 (define (last [l datum]) -> datum
   (while (pair? (cdr l)) (set! l (cdr l)))
   (car l))
-(#%fact last #'(foreign borrowed))
+(#%fact last '(foreign borrowed))
 
 (define (list-ref [l datum] [n u32]) -> datum
   (while (> n 0) (set! l (cdr l)) (-= n 1))
   (car l))
-(#%fact list-ref #'(foreign borrowed))
+(#%fact list-ref '(foreign borrowed))
 
 ;; ---- booleans ----
 
 (define (boolean [b i32]) -> datum (if b true-node (cast datum 0)))
-(#%fact boolean #'(foreign borrowed))
+(#%fact boolean '(foreign borrowed))
 (func (boolean-datum? [d i32]) #:inline -> i32 (i32.or (i32.eqz d) (i32.eq d %true)))
-(#%fact boolean-datum? #'(foreign raw))
+(#%fact boolean-datum? '(foreign raw))
 (func (integer-datum? [d i32]) #:inline -> i32 (i32.or (i32.and d 1) (node-tagged? d 6)))
-(#%fact integer-datum? #'(foreign raw))
+(#%fact integer-datum? '(foreign raw))
 
 ;; ---- symbols, keywords and strings ----
 ;;
@@ -567,21 +567,21 @@
 (define (symbol-length [s datum]) -> u32 (@ (cast (ptr u32) s) 2))
 (define (symbol-bytes [s datum]) -> (ptr u8) (+ (cast (ptr u8) s) 12))
 (define (bytes->symbol [p (ptr u8)] [n u32]) -> datum (intern! (& symbols) tag-symbol p n))
-(#%fact bytes->symbol #'(foreign borrowed))
+(#%fact bytes->symbol '(foreign borrowed))
 (define (bytes->keyword [p (ptr u8)] [n u32]) -> datum (intern! (& keywords) tag-keyword p n))
-(#%fact bytes->keyword #'(foreign borrowed))
+(#%fact bytes->keyword '(foreign borrowed))
 (define (string->symbol [s datum]) -> datum (bytes->symbol (string-bytes s) (string-length s)))
-(#%fact string->symbol #'(foreign borrowed))
+(#%fact string->symbol '(foreign borrowed))
 (define (string->keyword [s datum]) -> datum (bytes->keyword (string-bytes s) (string-length s)))
-(#%fact string->keyword #'(foreign borrowed))
+(#%fact string->keyword '(foreign borrowed))
 ;; A new string of the name, the caller's.
 (define (symbol->string [s datum]) -> datum (bytes->string (symbol-bytes s) (symbol-length s)))
-(#%fact symbol->string #'(foreign owned))
+(#%fact symbol->string '(foreign owned))
 (define (keyword->string [k datum]) -> datum (bytes->string (symbol-bytes k) (symbol-length k)))
-(#%fact keyword->string #'(foreign owned))
+(#%fact keyword->string '(foreign owned))
 ;; The symbol named by the C string.
 (define (symbol-named [name (ptr u8)]) -> datum (bytes->symbol name (strlen name)))
-(#%fact symbol-named #'(foreign borrowed))
+(#%fact symbol-named '(foreign borrowed))
 ;; The symbol of a's name then b's.
 (define (symbol-append [a datum] [b datum]) -> datum
   (let* ([n (+ (symbol-length a) (symbol-length b))] [p (cast (ptr u8) (malloc n))] [s datum 0])
@@ -590,7 +590,7 @@
     (set! s (bytes->symbol p n))
     (free p)
     s))
-(#%fact symbol-append #'(foreign borrowed))
+(#%fact symbol-append '(foreign borrowed))
 
 ;; A string: its length, then its bytes, which it owns, in its node.
 (define (string-length [s datum]) -> u32 (@ (cast (ptr u32) s) 1))
@@ -602,17 +602,17 @@
     (set! (@ (cast (ptr u32) s) 1) n)
     (memcpy (+ (cast (ptr u8) s) 8) p n)
     s))
-(#%fact bytes->string #'(foreign owned))
+(#%fact bytes->string '(foreign owned))
 ;; A new string of the C string: for a message.
 (define (str [s (ptr u8)]) -> datum (bytes->string s (strlen s)))
-(#%fact str #'(foreign owned))
+(#%fact str '(foreign owned))
 (define (string-append [a datum] [b datum]) -> datum
   (let* ([n (+ (string-length a) (string-length b))] [s (alloc-node (+ 8 n) tag-string)])
     (set! (@ (cast (ptr u32) s) 1) n)
     (memcpy (+ (cast (ptr u8) s) 8) (string-bytes a) (string-length a))
     (memcpy (+ (cast (ptr u8) s) (+ 8 (string-length a))) (string-bytes b) (string-length b))
     s))
-(#%fact string-append #'(foreign owned))
+(#%fact string-append '(foreign owned))
 (define (string=? [a datum] [b datum]) -> i32
   (and (== (string-length a) (string-length b))
        (== (memcmp (string-bytes a) (string-bytes b) (string-length a)) 0)))
@@ -620,7 +620,7 @@
 ;; ---- numbers and characters ----
 
 (define (fixnum [n i32]) -> datum (cast datum (bit-or (<< n 1) 1)))
-(#%fact fixnum #'(foreign owned))
+(#%fact fixnum '(foreign owned))
 (define (fixnum-value [d datum]) -> i32 (>> (cast i32 d) 1))
 
 ;; The integer n: a fixnum if it fits, else a node of its two's
@@ -629,12 +629,12 @@
   (if (and (>= n -1073741824) (<= n 1073741823))
       (fixnum (cast i32 n))
       (integer-node (cast u32 n) (cast u32 (>> n 32)) (< n 0))))
-(#%fact make-integer #'(foreign owned))
+(#%fact make-integer '(foreign owned))
 (define (make-unsigned-integer [n u64]) -> datum
   (if (<= n 1073741823)
       (fixnum (cast i32 n))
       (integer-node (cast u32 n) (cast u32 (>> n 32)) 0)))
-(#%fact make-unsigned-integer #'(foreign owned))
+(#%fact make-unsigned-integer '(foreign owned))
 (define (integer-node [low u32] [high u32] [negative i32]) -> datum
   (let ([d (alloc-node 16 tag-integer)])
     (set! (@ (cast (ptr u32) d) 1) low)
@@ -655,13 +655,13 @@
     (set! (@ (cast (ptr u32) d) 1) (cast u32 bits))
     (set! (@ (cast (ptr u32) d) 2) (cast u32 (>> bits 32)))
     d))
-(#%fact make-flonum #'(foreign owned))
+(#%fact make-flonum '(foreign owned))
 (define (flonum-value [d datum]) -> f64
   (bits-f64 (bit-or (cast i64 (@ (cast (ptr u32) d) 1)) (<< (cast i64 (@ (cast (ptr u32) d) 2)) 32))))
 
 ;; A character is its code, shifted, with 10 in the lowest bits.
 (define (integer->char [c u32]) -> datum (cast datum (bit-or (<< c 2) 2)))
-(#%fact integer->char #'(foreign owned))
+(#%fact integer->char '(foreign owned))
 (define (char->integer [d datum]) -> u32 (>> (cast u32 d) 2))
 
 ;; ---- equality and hashing ----
@@ -695,7 +695,7 @@
 
 ;; ---- writing ----
 ;;
-;; A datum written into a buffer (c/runtime.sub) as write (how 0) or
+;; A datum written into a buffer (base/runtime.sub) as write (how 0) or
 ;; display (how 1) writes it: a list in parentheses, a string in quotes
 ;; with ", \ and control characters escaped, or as it is for display, a
 ;; symbol's name, a keyword with #: before it, an integer in decimal, a
@@ -843,9 +843,9 @@
 ;; transformers are C, at compile time, on the kernel module's data.
 
 (begin-for-syntax
-  (require-unqualified c "../../../compiler/c/c.sub")
-  (require-unqualified kd "../../../compiler/kernel.sub")
-  (require sm "../../../compiler/c/c-syntax-match.sub" syntax-match _ ... ?)
+  (require-unqualified base "../../compiler/base/base.sub")
+  (require-unqualified kd "../../compiler/kernel.sub")
+  (require sm "../../compiler/base/syntax-match.sub" syntax-match _ ... ?)
 
   ;; The globals of the literals of the module being compiled, by datum:
   ;; (c-global . kernel-global), as this macro sees their names.

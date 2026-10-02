@@ -1,5 +1,5 @@
 ;; Lifecycle: experimental. Pattern macros for Substrate as the new
-;; compiler builds it (lib/languages/substrate): syntax-rules, written in the C-like Lisp at compile time,
+;; compiler builds it (lib/substrate): syntax-rules, written in the C-like Lisp at compile time,
 ;; so that a module written in Substrate can define a macro by patterns
 ;; without Substrate at compile time. substrate.sub's define-syntax sends
 ;; (define-syntax name (syntax-rules (literal ...) [pattern template] ...))
@@ -7,7 +7,7 @@
 ;;
 ;; A use of name is taken apart by the first pattern it matches, and
 ;; replaced with that clause's template, the pattern's variables in it
-;; filled in. A pattern is syntax-match's (compiler/c/patterns.sub), but for
+;; filled in. A pattern is syntax-match's (compiler/base/patterns.sub), but for
 ;; checks (? pred p ...), its head standing for name; a literal in it is
 ;; an identifier that matches one bound as it is, #'literal. A template
 ;; is syntax, in which a pattern variable is what it matched, and t ...
@@ -18,13 +18,13 @@
 ;; a transformer, syntax-match on the patterns, whose clauses build the
 ;; templates. So the macro runs as C.
 
-(require pt "../../../compiler/c/patterns.sub" _ ... ?)
+(require pt "../../compiler/patterns.sub" _ ... ?)
 ;; quote, in a pattern, is the user's, values.sub's.
 (require v "values.sub" quote)
 (begin-for-syntax
-  (require-unqualified c "../../../compiler/c/c.sub")
-  (require-unqualified kd "../../../compiler/kernel.sub")
-  (require sm "../../../compiler/c/c-syntax-match.sub" syntax-match _ ... ?))
+  (require-unqualified base "../../compiler/base/base.sub")
+  (require-unqualified kd "../../compiler/kernel.sub")
+  (require sm "../../compiler/base/syntax-match.sub" syntax-match _ ... ?))
 
 (provide syntax-rules define-rules)
 
