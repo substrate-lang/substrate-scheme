@@ -1,5 +1,5 @@
-;; Lifecycle: experimental. Pattern macros for Substrate on cells
-;; (next/cells): syntax-rules, written in the C-like Lisp at compile time,
+;; Lifecycle: experimental. Pattern macros for Substrate on its own values
+;; (next/owned): syntax-rules, written in the C-like Lisp at compile time,
 ;; so that a module written in Substrate can define a macro by patterns
 ;; without Substrate at compile time. substrate.sub's define-syntax sends
 ;; (define-syntax name (syntax-rules (literal ...) [pattern template] ...))
@@ -19,6 +19,8 @@
 ;; templates. So the macro runs as C.
 
 (require pt "../c/patterns.sub" _ ... ?)
+;; quote, in a pattern, is the user's, values.sub's.
+(require v "values.sub" quote)
 (begin-for-syntax
   (require-unqualified c "../c/c.sub")
   (require-unqualified kd "../compiler/kernel.sub")

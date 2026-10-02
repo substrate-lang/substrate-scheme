@@ -1,14 +1,14 @@
-;; Substrate on cells frees what it is done with (next/cells/lower.sub):
-;; each value has owners, counted in its cell, and a program drops a
-;; value where its last owner is done with it. So once a computation's
-;; results are printed and dropped, no more cells of the heap are in use
-;; than before it: each check prints the difference in (live-cells), 0.
-(require-unqualified substrate "../../cells/substrate.sub")
+;; Substrate on its own values frees what it is done with
+;; (next/owned/lower.sub): each value has owners, counted in its node, and
+;; a program drops a value where its last owner is done with it. So once
+;; a computation's results are printed and dropped, no more nodes are in
+;; use than before it: each check prints the difference in (live-nodes), 0.
+(require-unqualified substrate "../../owned/substrate.sub")
 
 (define (check name thunk)
-  (let ([before (live-cells)])
+  (let ([before (live-nodes)])
     (thunk)
-    (display name) (display ": ") (display (- (live-cells) before)) (newline)))
+    (display name) (display ": ") (display (- (live-nodes) before)) (newline)))
 
 ;; A thunk made where check is called would be freed inside it, as its
 ;; last owner, check, is done with it: each thunk is a definition.
@@ -89,7 +89,7 @@
     (display (list (point-x p) (point-y p) (point? p) (match p [(point a b) (append a b)])))
     (newline)))
 
-;; Integers past the fixnum range and flonums are cells: arithmetic and
+;; Integers past the fixnum range and flonums are nodes: arithmetic and
 ;; reading make them, and they are dropped.
 (define (numbers)
   (let loop ([i 0] [big 1] [sum 0])
@@ -114,19 +114,6 @@
   (display (with-handlers ([pair? (lambda (v) (car v))]) (raise (list 'raised))))
   (newline))
 
-;; Compile time: a macro, Substrate code the expander runs in the heap,
-;; makes lists, strings, closures and a table and drops them, and expands
-;; to the cells left in use after it, 0.
-(begin-for-syntax (require-unqualified substrate "../../cells/substrate.sub"))
-(define-syntax (compile-time stx)
-  (let ([before (live-cells)])
-    (let* ([xs (let loop ([i 0] [acc '()]) (if (= i 100) acc (loop (+ i 1) (cons i acc))))]
-           [t (make-hasheq)])
-      (for-each (lambda (x) (hash-set! t x (list (number->string x) (lambda () x)))) xs)
-      (hash-clear! t))
-    (datum->syntax stx (list 'quote (- (live-cells) before)) stx)))
-(define (at-compile-time) (display (compile-time)) (newline))
-
 (define (main)
   (check "lists" lists)
   (check "closures" closures)
@@ -137,5 +124,4 @@
   (check "structs" structs)
   (check "numbers" numbers)
   (check "calls" calls)
-  (check "exceptions" exceptions)
-  (check "compile time" at-compile-time))
+  (check "exceptions" exceptions))
