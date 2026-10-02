@@ -1,6 +1,6 @@
-;; Lifecycle: experimental. The runtime of Substrate on its own values
-;; (next/owned): what Substrate's code runs with, written in the C-like
-;; Lisp on values.sub's nodes, which are Substrate's values. A value is a
+;; Lifecycle: experimental. The runtime of Substrate as the new compiler
+;; builds it (next/substrate): what Substrate's code runs with, written in
+;; the C-like Lisp on values.sub's nodes, which are Substrate's values. A value is a
 ;; datum: a pair, symbol, keyword, string, integer, flonum or character,
 ;; #f (0), () or #t, all values.sub's; or a node of one of the kinds
 ;; below, whose layout is this module's: a closure, box, vector, byte

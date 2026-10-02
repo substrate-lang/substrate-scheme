@@ -1,7 +1,7 @@
-;; Lifecycle: experimental. Substrate's values, its own (next/owned):
-;; written in the C-like Lisp, in the memory the program shares, owned
-;; and freed by the program, whose code (lower.sub) drops the last
-;; owner's reference. The kernel module (compiler/kernel.sub) keeps the
+;; Lifecycle: experimental. Substrate's values, as the new compiler
+;; builds Substrate (next/substrate): written in the C-like Lisp, in the
+;; memory the program shares, owned and freed by the program, whose code
+;; (lower.sub) drops the last owner's reference. The kernel module (compiler/kernel.sub) keeps the
 ;; compiler's data, which these never are: Substrate does not run at
 ;; compile time, and its macros are written in the C-like Lisp on the
 ;; kernel module's data.

@@ -1,5 +1,5 @@
-;; Lifecycle: experimental. Pattern macros for Substrate on its own values
-;; (next/owned): syntax-rules, written in the C-like Lisp at compile time,
+;; Lifecycle: experimental. Pattern macros for Substrate as the new
+;; compiler builds it (next/substrate): syntax-rules, written in the C-like Lisp at compile time,
 ;; so that a module written in Substrate can define a macro by patterns
 ;; without Substrate at compile time. substrate.sub's define-syntax sends
 ;; (define-syntax name (syntax-rules (literal ...) [pattern template] ...))

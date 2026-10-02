@@ -1,5 +1,6 @@
-;; Lifecycle: experimental. Closures and ownership for Substrate on its
-;; own values (next/owned), at compile time, in the C-like Lisp.
+;; Lifecycle: experimental. Closures and ownership for Substrate as the
+;; new compiler builds it (next/substrate), at compile time, in the C-like
+;; Lisp.
 ;; Substrate's values are values.sub's nodes, each with a count of owners
 ;; (dup and drop), so a program frees what it is done with, and the
 ;; kernel's lambda makes a GC closure, so Substrate makes its own, a node
@@ -1083,7 +1084,7 @@
              (set! (-> c typed) 1)
              (set! (-> c result)
                    (cond [(== r (sym void)) e-void]
-                         [(datum-type? r) (if (ends-with? path "owned/runtime.sub") e-owned e-borrowed)]
+                         [(datum-type? r) (if (ends-with? path "substrate/runtime.sub") e-owned e-borrowed)]
                          [else e-raw])))])))
 
 ;; A function of some module's about which nothing is known: a value of
