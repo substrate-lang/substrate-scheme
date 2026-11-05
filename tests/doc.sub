@@ -4,7 +4,7 @@
 (require-unqualified std/package/path)
 (require-unqualified std/test/run)
 
-(test doc #:grants ((run "../../substrate/host/subhost.mjs"))
+(test doc #:grants ((run "../../substrate/substrate/host/subhost.mjs"))
   (let ([d (scratch-directory)])
     (expect-ran (sub "." "doc" "-o" d "tests/doc/sample"))
     (expect-equal (text-in (joined-path d "sample/scheme.txt")) (text-in "tests/doc/expected/scheme.txt"))))

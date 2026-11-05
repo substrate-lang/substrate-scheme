@@ -2,7 +2,8 @@
 # Scheme's benchmarks, timed on V8.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-root="$(cd "$here/../../.." && pwd)"
+root="$(cd "$here/../.." && pwd)"
+substrate="$(cd "$root/../substrate" && pwd)"
 out="$root/build/bench/scheme"
 n="${1:-3}"
 shift || true
@@ -10,10 +11,10 @@ names=("$@")
 [ ${#names[@]} -gt 0 ] || names=(big-arith big-traverse big-conses big-calls lists closures interp queens strings)
 mkdir -p "$out"
 for name in "${names[@]}"; do
-  (cd "$here" && "$root/bin/substrate" build "$name.sub" -o "$out/$name" -c "$root/build/bench/cache" > /dev/null)
+  (cd "$here" && "$substrate/bin/substrate" build "$name.sub" -o "$out/$name" -c "$root/build/bench/cache" > /dev/null)
 done
 
-node=(node --stack-size=4000 --experimental-wasm-exnref --no-liftoff "$root/substrate/host/subhost.mjs")
+node=(node --stack-size=4000 --experimental-wasm-exnref --no-liftoff "$substrate/substrate/host/subhost.mjs")
 declare -A best result
 run() { # name
   local start=$EPOCHREALTIME line end us
