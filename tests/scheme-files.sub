@@ -1,0 +1,15 @@
+;; Writing and reading a file. The test then exits, which ends it after what it has printed.
+(language scheme)
+
+(define path "build/test/scheme-files.txt")
+
+(define (run)
+  (display-to-file (list "λ" 'sym 42) path)
+  (write (file->string path)) (newline)
+  (display-to-file (bytes 104 105 0 255) path)
+  (write (file->bytes path)) (newline)
+  (display "done") (newline)
+  (exit 0)
+  (display "not reached") (newline))
+
+(test scheme-files #:output-file "scheme-files.out" (run))

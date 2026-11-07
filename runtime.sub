@@ -24,7 +24,8 @@
          inside-char-error string-ref-char
          stdout-port stderr-port new-port port? port-arg port-bytes port-string port-length write-value write-to-port
          write-byte-to write-value-to port-flush line-start? reset-runtime! out-format format-value write-format-to error-value
-         file->bytes file-exists? file->string display-to-file command-line-arguments instantiate-code exit-with)
+         file->bytes file-exists? file->string display-to-file command-line-arguments arguments-vector instantiate-code
+         exit-with exit-status)
 
 ;; ---- kinds ----
 ;; After values.sub's tags (0 to 7); core.sub's inline code assumes closures 9, structs 14.
@@ -1230,12 +1231,16 @@
 (#%fact display-to-file '(raises))
 
 (define (command-line-arguments) -> datum
-  (let* ([args (host-args)] [v (make-vector (-> args length) 0)])
+  (let* ([args (host-args)] [v (arguments-vector args)])
+    (free (-> args items))
+    v))
+
+(define (arguments-vector [args (slice string)]) -> datum
+  (let ([v (make-vector (-> args length) 0)])
     (for ([i u32 0]) (< i (-> args length)) (+= i 1)
       (let ([bytes (bytes->datum (cast (slice u8) (@ args i)))])
         (vector-set! v i (bytes->string-of bytes 0 0 0 (lit "current-command-line-arguments")))
         (drop bytes)))
-    (free (-> args items))
     v))
 
 (define (instantiate-code [name datum] [code datum] [imports datum]) -> datum
@@ -1257,10 +1262,12 @@
     (free pairs)
     r))
 
-(define (exit-with [v datum])
+(define (exit-with [v datum]) (host-exit (exit-status v) ""))
+
+(define (exit-status [v datum]) -> i32
   (let ([n i64 0])
     (when (integer? v) (set! n (integer-value v)))
-    (host-exit (if (and (>= n 1) (<= n 255)) (cast i32 n) 0) "")))
+    (if (and (>= n 1) (<= n 255)) (cast i32 n) 0)))
 
 (#%fact error-value '(foreign diverges))
 (#%fact host-error '(foreign diverges))

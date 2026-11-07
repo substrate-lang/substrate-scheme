@@ -1,20 +1,10 @@
-;; Scheme programs built and run with substrate: one that exits with a status, one that reads and writes files, and two
-;; modules that compile to the same bytes whichever order a program requires them in.
+;; Two modules that compile to the same bytes whichever order a program requires them in.
 (require-unqualified host/fs)
 (require-unqualified std/test/test)
 (require-unqualified std/package/path)
 (require-unqualified std/test/run)
 
-(test scheme-exit #:grants ((run "../../substrate/substrate/host/subhost.mjs"))
-  (expect-ran (sub "tests/programs" "run" "err-scheme-exit.sub") #:fails "leaving"))
-
-(test scheme-files #:grants ((run "../../substrate/substrate/host/subhost.mjs") (read "tests/programs"))
-  (let ([d (scratch-directory)])
-    (expect-ran (sub "tests/programs" "run" (joined "-R=" d) (joined "-W=" d)
-                     "scheme-files.sub" (joined-path d "scheme-files.txt") "second")
-                #:output-file "tests/programs/scheme-files.out")))
-
-(test require-order #:grants ((run "../../substrate/substrate/host/subhost.mjs"))
+(test require-order #:grants ((toolchain))
   (let* ([d (scratch-directory)] [cache (shared-cache)])
     (expect-ran (sub "tests" "build" "order-a.sub" "-o" (joined-path d "a") "-c" cache))
     (expect-ran (sub "tests" "build" "order-b.sub" "-o" (joined-path d "b") "-c" cache))

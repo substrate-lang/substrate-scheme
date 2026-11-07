@@ -1,0 +1,31 @@
+;; The status that (exit v) asks the host to end the program with, and the vector that current-command-line-arguments
+;; makes of the program's arguments.
+(require-unqualified std/test/test)
+(require rt scheme/runtime)
+(require v scheme/values)
+(require wasm compiler/wasm)
+(wasm:memory from rt)
+
+(test exit-status
+  (expect-equal (rt:exit-status (v:fixnum 3)) 3)
+  (expect-equal (rt:exit-status (v:fixnum 255)) 255)
+  (expect-equal (rt:exit-status (v:fixnum 256)) 0)
+  (expect-equal (rt:exit-status (v:fixnum 0)) 0)
+  (expect-equal (rt:exit-status (v:true-value)) 0))
+
+(test arguments-vector
+  (let ([args (rt:arguments-vector (slice (array-of string "first" "λ")))])
+    (expect-equal (rt:vector-length args) 2)
+    (expect-equal (item args 0) "first")
+    (expect-equal (item args 1) "λ")
+    (v:drop args)))
+
+(define (item [args v:datum] [i u32]) -> string
+  (let* ([s (rt:vector-ref args i)] [text (copied (v:datum->string s))])
+    (v:drop s)
+    text))
+
+(define (copied [s string]) -> string
+  (let ([b (make-buffer)])
+    (buffer-add-string! (& b) s)
+    (buffer-string (& b))))
