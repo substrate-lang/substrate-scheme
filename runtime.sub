@@ -1183,11 +1183,11 @@
 
 ;; ---- the host: files, the command line, instantiating code ----
 
-(define (host-message [b (ptr buffer)] [why string])
-  (buffer-add-string! b why)
-  (free (-> why bytes)))
+(define (host-message [b (ptr buffer)] [why (ptr error)])
+  (buffer-add-string! b (error-text why))
+  (error-free! why))
 
-(define (host-error [who datum] [why string]) -> datum
+(define (host-error [who datum] [why (ptr error)]) -> datum
   (let ([b (make-buffer)])
     (out-who (& b) who)
     (buffer-add-string! (& b) ": ")
@@ -1195,8 +1195,8 @@
     (fail-with (& b))))
 
 (define (read-file [path datum] [who datum]) -> datum
-  (let* ([why string] [f (slice u8)] [r datum 0])
-    (when (< (fs-read-file (datum->string (string-arg path who)) (& f) (& why)) 0) (host-error who why))
+  (let* ([why error] [f (slice u8)] [r datum 0])
+    (unless (fs-read-file (datum->string (string-arg path who)) (& f) (& why)) (host-error who (& why)))
     (set! r (bytes->datum f))
     (free (-> f items))
     r))
@@ -1205,7 +1205,7 @@
 (#%fact file->bytes '(raises))
 
 (define (file-exists? [path datum]) -> bool
-  (let ([info fs-info]) (>= (fs-stat (datum->string (string-arg path (lit "file-exists?"))) (& info) 0) 0)))
+  (let ([info fs-info]) (fs-stat (datum->string (string-arg path (lit "file-exists?"))) (& info) 0)))
 
 (define (file->string [path datum]) -> datum
   (let ([v (read-file path (lit "file->string"))] [s datum 0])
@@ -1221,11 +1221,11 @@
 (#%fact file->string '(raises))
 
 (define (display-to-file [v datum] [path datum]) -> datum
-  (let* ([s (string-arg path (lit "display-to-file"))] [b (make-buffer)] [why string])
+  (let* ([s (string-arg path (lit "display-to-file"))] [b (make-buffer)] [why error])
     (write-value (& b) v #t)
-    (when (< (fs-write-file (datum->string s) (buffer-bytes (& b)) (& why)) 0)
+    (unless (fs-write-file (datum->string s) (buffer-bytes (& b)) (& why))
       (buffer-free! (& b))
-      (host-error (lit "display-to-file") why))
+      (host-error (lit "display-to-file") (& why)))
     (buffer-free! (& b))
     0))
 (#%fact display-to-file '(raises))
@@ -1245,7 +1245,7 @@
 
 (define (instantiate-code [name datum] [code datum] [imports datum]) -> datum
   (let* ([s (string-arg name (lit "instantiate"))] [a (bytes-arg code (lit "instantiate"))] [l imports]
-         [pairs (-> (new 0 string (* 2 (length imports))) items)] [i u32 0] [r datum 0] [why string])
+         [pairs (-> (new 0 string (* 2 (length imports))) items)] [i u32 0] [r datum 0] [why error])
     (while (pair? l)
       (let ([e (car l)])
         (unless (pair? e) (wrong-type (lit "instantiate") (lit "a pair") e))
@@ -1254,9 +1254,9 @@
         (+= i 2))
       (set! l (cdr l)))
     (unless (null? l) (wrong-type (lit "instantiate") (lit "a list") imports))
-    (unless (== (host-instantiate (datum->string s) (datum->bytes a) (slice pairs i) #f (& why)) 0)
+    (unless (host-instantiate (datum->string s) (datum->bytes a) (slice pairs i) #f (& why))
       (let ([b (make-buffer)])
-        (host-message (& b) why)
+        (host-message (& b) (& why))
         (set! r (string->datum (buffer-string (& b))))
         (buffer-free! (& b))))
     (free pairs)

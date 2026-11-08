@@ -10,6 +10,6 @@
     (expect-equal (text-in (joined-path d "sample/scheme.txt")) (text-in "tests/doc/expected/scheme.txt"))))
 
 (define (text-in [path string]) -> string
-  (let ([bytes (slice u8)] [why string])
-    (when (< (fs-read-file path (& bytes) (& why)) 0) (throw test-failed why))
+  (let ([bytes (slice u8)] [why error])
+    (unless (fs-read-file path (& bytes) (& why)) (throw test-failed (error-text (& why))))
     (cast string bytes)))
