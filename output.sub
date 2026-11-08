@@ -16,9 +16,8 @@
 (#%fact test-output-file '(foreign free))
 
 (define (captured [thunk datum]) -> string
-  (let ([b (cast (ptr buffer) (malloc (sizeof buffer)))] [before (ptr buffer) 0])
+  (let ([b (new 0 (make-buffer))] [before (ptr buffer) 0])
     (rt:port-flush (rt:stdout-port))
-    (set! (@ b) (make-buffer))
     (set! before (output-to! b))
     (drop (rt:call-closure thunk 0 (cast datum 0) (cast datum 0) (cast datum 0) (cast datum 0)))
     (rt:port-flush (rt:stdout-port))

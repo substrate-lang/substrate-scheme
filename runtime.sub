@@ -550,7 +550,7 @@
     (while (< i n)
       (+= count 1)
       (+= i (char-utf-8-length (decode-char x i))))
-    (set! cps (cast (ptr u32) (malloc (* (+ count 1) 4))))
+    (set! cps (-> (new 0 u32 (+ count 1)) items))
     (set! i 0)
     (set! count 0)
     (while (< i n)
@@ -1245,7 +1245,7 @@
 
 (define (instantiate-code [name datum] [code datum] [imports datum]) -> datum
   (let* ([s (string-arg name (lit "instantiate"))] [a (bytes-arg code (lit "instantiate"))] [l imports]
-         [pairs (cast (ptr string) (malloc (* 16 (length imports))))] [i u32 0] [r datum 0] [why string])
+         [pairs (-> (new 0 string (* 2 (length imports))) items)] [i u32 0] [r datum 0] [why string])
     (while (pair? l)
       (let ([e (car l)])
         (unless (pair? e) (wrong-type (lit "instantiate") (lit "a pair") e))

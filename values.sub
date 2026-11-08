@@ -363,7 +363,7 @@
 (define (intern! [t (ptr intern-table)] [tag u32] [text string]) -> datum
   (when (== (-> t capacity) 0)
     (set! (-> t capacity) 256)
-    (set! (-> t entries) (cast (ptr u32) (calloc 256 4))))
+    (set! (-> t entries) (-> (new 0 u32 256) items)))
   (when (> (* (-> t count) 2) (-> t capacity)) (grow-intern! t))
   (let* ([h (cast u32 (hash-bytes (cast (slice u8) text)))] [mask (- (-> t capacity) 1)] [i (bit-and h mask)])
     (while (!= (@ (-> t entries) i) 0)
@@ -383,7 +383,7 @@
 
 (define (grow-intern! [t (ptr intern-table)])
   (let* ([old (-> t entries)] [old-capacity (-> t capacity)] [capacity (* old-capacity 2)]
-         [entries (cast (ptr u32) (calloc capacity 4))] [mask (- capacity 1)])
+         [entries (-> (new 0 u32 capacity) items)] [mask (- capacity 1)])
     (for ([j u32 0]) (< j old-capacity) (+= j 1)
       (let ([s (@ old j)])
         (when (!= s 0)

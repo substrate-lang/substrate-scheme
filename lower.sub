@@ -499,7 +499,7 @@
   (let ([l fns])
     (while (pair? l)
       (let* ([f (car l)] [name (car f)] [params (cadr f)] [body (caddr f)]
-             [m (cast (ptr mfn) (arena-alloc (current-arena) (sizeof mfn)))]
+             [m (new (current-arena) mfn)]
              [e (expand-marked (datum->syntax c (cons (named 'let name) (cons (param-bindings params) body)) name))])
         (set! (-> m name) name)
         (set! (-> m ids) (binding-ids (parts (cadr (parts e)))))
@@ -835,7 +835,7 @@
 (struct callee [scheme bool] [result i32] [positions datum] [known bool] [typed bool] [raises bool])
 
 (define (callee-of [f datum]) -> (ptr callee)
-  (let ([c (cast (ptr callee) (arena-alloc (current-arena) (sizeof callee)))])
+  (let ([c (new (current-arena) callee)])
     (set! (-> c scheme) #f)
     (set! (-> c result) e-raw)
     (set! (-> c positions) nil)
@@ -1605,13 +1605,7 @@
   acc)
 
 (define (new-operands) -> (ptr operands)
-  (let ([acc (cast (ptr operands) (arena-alloc (current-arena) (sizeof operands)))])
-    (set! (-> acc out) nil)
-    (set! (-> acc temps) nil)
-    (set! (-> acc drops) nil)
-    (set! (-> acc any-temp) #f)
-    (set! (-> acc padded) #f)
-    acc))
+  (new (current-arena) (operands #:out nil #:temps nil #:drops nil #:any-temp #f #:padded #f)))
 
 (define (read-root [o datum] [env datum]) -> i32
   (cond [(identifier? o) (if (!= (lookup env (id-of o)) 0) (id-of o) -1)]
