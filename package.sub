@@ -1,5 +1,5 @@
 (package scheme
   (version "0.9.0")
-  (substrate "0.9.4")
+  (substrate "0.10.0")
   (exports core lower output rules runtime test values)
   (dependencies (nodes (path "../nodes"))))
