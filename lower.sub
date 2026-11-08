@@ -287,7 +287,9 @@
 
 (define (candidate! [id i32] [m datum])
   (put! candidate id m)
-  (hash-set! marker-owner (cast u64 (index-of-lambda m)) (cast u32 (+ id 1))))
+  (hash-set! marker-owner (cast u64 (index-of-lambda m)) (cast u32 id)))
+
+(define (owner-of [k i32]) -> i32 (let ([o (hash-find marker-owner (cast u64 k))]) (if (== o 0) -1 (cast i32 (@ o)))))
 
 (define (find-direct!)
   (let ([ids nil] [sites call-sites] [changed #t])
@@ -330,14 +332,15 @@
 (define lambda-chain (ptr hash-table) 0)
 
 (define (lambda-free [k i32]) -> datum (cast datum (hash-ref marker-free (cast u64 k))))
+(define (self-id-of [k i32]) -> i32 (let ([s (hash-find self-of (cast u64 k))]) (if (== s 0) -1 (cast i32 (@ s)))))
 
 (define (find-self-refs!)
   (for ([k i32 1]) (<= k lambda-count) (+= k 1)
-    (let ([o (- (cast i32 (hash-ref marker-owner (cast u64 k))) 1)] [m (lambda-at k)])
+    (let ([o (owner-of k)] [m (lambda-at k)])
       (when (and (>= o 0) (not (marked? direct o)) (has-id? (lambda-free k) o)
                  (or (and (== (hash-ref set-count (key o)) 0) (== (get candidate o) m))
                      (and (== (hash-ref set-count (key o)) 1) (== (get set-rhs o) m))))
-        (hash-set! self-of (cast u64 k) (cast u32 (+ o 1))))))
+        (hash-set! self-of (cast u64 k) (cast u32 o)))))
   (set! captured (make-table))
   (for ([k i32 1]) (<= k lambda-count) (+= k 1)
     (let ([ids (lambda-free k)])
@@ -347,10 +350,10 @@
         (set! ids (cdr ids))))))
 
 (define (self-inside? [k i32] [id i32]) -> bool
-  (when (== (cast i32 (hash-ref self-of (cast u64 k))) (+ id 1)) (return #t))
+  (when (== (self-id-of k) id) (return #t))
   (let ([chain (cast datum (hash-ref lambda-chain (cast u64 k)))])
     (while (pair? chain)
-      (when (== (cast i32 (hash-ref self-of (cast u64 (integer-value (car chain))))) (+ id 1)) (return #t))
+      (when (== (self-id-of (cast i32 (integer-value (car chain)))) id) (return #t))
       (set! chain (cdr chain)))
     #f))
 
@@ -696,8 +699,8 @@
 (define (direct-call-ok? [id i32] [chain datum]) -> bool
   (let* ([own (index-of-lambda (get candidate id))] [bound (get bind-chain id)] [n (- (length chain) (length bound))])
     (while (> n 0)
-      (let* ([k (cast i32 (integer-value (car chain)))] [owner (cast i32 (hash-ref marker-owner (cast u64 k)))])
-        (unless (or (== k own) (and (!= owner 0) (marked? direct (- owner 1)))) (return #f)))
+      (let* ([k (cast i32 (integer-value (car chain)))] [owner (owner-of k)])
+        (unless (or (== k own) (and (>= owner 0) (marked? direct owner))) (return #f)))
       (set! chain (cdr chain))
       (-= n 1))
     #t))
@@ -719,9 +722,9 @@
           (let* ([z (cast i32 (integer-value (car (car sites))))] [chain (cdr (car sites))])
             (when (marked? direct z)
               (while (pair? chain)
-                (let* ([k (cast i32 (integer-value (car chain)))] [owner (cast i32 (hash-ref marker-owner (cast u64 k)))])
-                  (when (and (!= owner 0) (marked? direct (- owner 1)) (!= (- owner 1) z))
-                    (let* ([x (- owner 1)] [before (get direct-caps x)] [after (add-caps before (get direct-caps z) (lambda-at k) x)])
+                (let* ([k (cast i32 (integer-value (car chain)))] [x (owner-of k)])
+                  (when (and (>= x 0) (marked? direct x) (!= x z))
+                    (let* ([before (get direct-caps x)] [after (add-caps before (get direct-caps z) (lambda-at k) x)])
                       (unless (== (length before) (length after))
                         (put! direct-caps x after)
                         (set! changed #t)))))
@@ -1819,7 +1822,7 @@
 (define (rw-lambda [s datum] [env datum] [live datum]) -> datum
   (let* ([lp (lambda-parts s)] [params (car lp)] [result (cadr lp)] [body (caddr lp)]
          [frees (free-of s)] [name (fresh "lambda" s)] [self (fresh "self" s)]
-         [self-id (- (cast i32 (hash-ref self-of (cast u64 (index-of-lambda s)))) 1)]
+         [self-id (self-id-of (index-of-lambda s))]
          [inner nil] [reads nil] [capture-ids nil] [i u32 0])
     (while (pair? frees)
       (let* ([r (car frees)] [id (cast i32 (integer-value (car r)))] [x (cdr r)] [cv (fresh "captured" x)]
