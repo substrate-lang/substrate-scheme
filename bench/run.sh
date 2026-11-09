@@ -2,7 +2,7 @@
 # Scheme's benchmarks, timed on V8.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-root="$(cd "$here/../.." && pwd)"
+root="$(cd "$here/.." && pwd)"
 substrate="$(cd "$root/../substrate" && pwd)"
 out="$root/build/bench/scheme"
 n="${1:-3}"
