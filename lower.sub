@@ -1,6 +1,7 @@
 ;; Scheme's closure conversion and ownership pass, run at compile time on each body.
 
 (require-unqualified compiler/macros)
+(require-unqualified std/string)
 
 (provide convert-body convert-lambda infer-module! in-pass? closure-of)
 
@@ -872,9 +873,6 @@
   (and (pair? t) (== (car t) 'ptr) (pair? (cdr t)) (pair? (cadr t))
        (== (car (cadr t)) 'struct) (== (last (cadr t)) 'node)))
 
-(define (ends-with? [s string] [suffix string]) -> bool
-  (and (>= (-> s length) (-> suffix length)) (== (slice s (- (-> s length) (-> suffix length))) suffix)))
-
 (define (read-facts! [c (ptr callee)] [f datum])
   (let ([fs (try (syntax-local-facts f) [catch compile-error (m x l) nil])]
         [substrate-fact datum 0] [scheme-fact datum 0] [free #f])
@@ -907,7 +905,7 @@
              (set! (-> c typed) #t)
              (set! (-> c result)
                    (cond [(== r 'void) e-void]
-                         [(datum-type? r) (if (ends-with? path "scheme/runtime.sub") e-owned e-borrowed)]
+                         [(datum-type? r) (if (string-suffix? path "scheme/runtime.sub") e-owned e-borrowed)]
                          [else e-raw])))])))
 
 (define (signature-kind! [c (ptr callee)] [f datum])

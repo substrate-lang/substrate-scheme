@@ -440,7 +440,7 @@
            (write-to (& b) n #f)]
           [else
            (let ([x (int-value n (lit "number->string"))] [r (cast u64 (radix-value radix (lit "number->string")))])
-             (when (< x 0) (buffer-add-byte! (& b) 45))
+             (when (< x 0) (buffer-add-byte! (& b) #\-))
              (write-digits (& b) (if (< x 0) (cast u64 (- 0 x)) (cast u64 x)) r))])
     (set! s (string->datum (buffer-string (& b))))
     (buffer-free! (& b))
@@ -1037,7 +1037,7 @@
     (when (< fd 0) (return))
     (if (== fd 1) (print-bytes (-> b bytes) (-> b length)) (host-write fd (buffer-bytes b)))
     (when (and (== fd 1) (> (-> b length) 0))
-      (set! line-start (== (@ (-> b bytes) (- (-> b length) 1)) 10)))
+      (set! line-start (== (@ (-> b bytes) (- (-> b length) 1)) #\newline)))
     (set! (-> b length) 0)))
 
 (define line-start bool #t)
@@ -1058,14 +1058,14 @@
         [(vector? v)
          (buffer-add-string! b "#(")
          (for ([i u32 0]) (< i (vector-length v)) (+= i 1)
-           (when (> i 0) (buffer-add-byte! b 32))
+           (when (> i 0) (buffer-add-byte! b #\space))
            (write-value b (vector-item v i) display))
-         (buffer-add-byte! b 41)]
+         (buffer-add-byte! b #\))]
         [(bytes? v) (if display (buffer-add! b (datum->bytes v)) (write-bytes-value b v))]
         [(struct? v)
          (buffer-add-string! b "#<")
          (buffer-add-string! b (symbol->string (struct-type-name (-> (cast (ptr struct-block) (block-of v)) type))))
-         (buffer-add-byte! b 62)]
+         (buffer-add-byte! b #\>)]
         [(table? v) (write-table b v display)]
         [(port? v) (buffer-add-string! b "#<port>")]
         [(exn? v) (buffer-add-string! b "#<exn>")]
@@ -1077,16 +1077,16 @@
     (when (!= (-> prefix length) 0)
       (buffer-add-string! b prefix)
       (return (write-value b (cadr v) display)))
-    (buffer-add-byte! b 40)
+    (buffer-add-byte! b #\()
     (write-value b (car v) display)
     (while (pair? rest)
-      (buffer-add-byte! b 32)
+      (buffer-add-byte! b #\space)
       (write-value b (car rest) display)
       (set! rest (cdr rest)))
     (unless (null? rest)
       (buffer-add-string! b " . ")
       (write-value b rest display))
-    (buffer-add-byte! b 41)))
+    (buffer-add-byte! b #\))))
 
 (define (abbreviation [v datum]) -> string
   (let ([head (car v)] [rest (cdr v)])
@@ -1106,14 +1106,14 @@
     (buffer-add-string! b "#\"")
     (for ([i u32 0]) (< i (-> t length)) (+= i 1)
       (let ([c (cast i32 (@ t i))])
-        (cond [(or (== c 34) (== c 92)) (buffer-add-byte! b 92) (buffer-add-byte! b c)]
-              [(and (>= c 32) (< c 127)) (buffer-add-byte! b c)]
+        (cond [(or (== c #\") (== c #\\)) (buffer-add-byte! b #\\) (buffer-add-byte! b c)]
+              [(and (>= c #\space) (< c #\delete)) (buffer-add-byte! b c)]
               [else
-               (buffer-add-byte! b 92)
-               (buffer-add-byte! b (+ 48 (>> c 6)))
-               (buffer-add-byte! b (+ 48 (bit-and (>> c 3) 7)))
-               (buffer-add-byte! b (+ 48 (bit-and c 7)))])))
-    (buffer-add-byte! b 34)))
+               (buffer-add-byte! b #\\)
+               (buffer-add-byte! b (+ #\0 (>> c 6)))
+               (buffer-add-byte! b (+ #\0 (bit-and (>> c 3) 7)))
+               (buffer-add-byte! b (+ #\0 (bit-and c 7)))])))
+    (buffer-add-byte! b #\")))
 
 (define (write-table [b (ptr buffer)] [t datum] [display bool])
   (let ([kind (-> (table-arg t (lit "write")) kind)] [l (table-walk t 2 (lit "write"))])
@@ -1121,8 +1121,8 @@
     (while (pair? l)
       (write-value b (car l) display)
       (set! l (cdr l))
-      (when (pair? l) (buffer-add-byte! b 32)))
-    (buffer-add-byte! b 41)))
+      (when (pair? l) (buffer-add-byte! b #\space)))
+    (buffer-add-byte! b #\))))
 
 (define (write-to-port [v datum] [p datum] [display bool])
   (write-value (port-buffer p) v display)
@@ -1138,15 +1138,16 @@
   (let* ([p (datum->string (string-arg form who))] [n (-> p length)] [i u32 0])
     (while (< i n)
       (let ([c (cast i32 (@ p i))])
-        (cond [(!= c 126) (buffer-add-byte! b c) (+= i 1)]
+        (cond [(!= c #\~) (buffer-add-byte! b c) (+= i 1)]
               [else
                (when (>= (+ i 1) n) (format-error who (lit "the format string ends in ~")))
                (let ([d (cast i32 (@ p (+ i 1)))])
-                 (cond [(or (== d 126) (== d 37) (== d 110) (== d 78)) (buffer-add-byte! b (if (== d 126) 126 10))]
+                 (cond [(or (== d #\~) (== d #\%) (== d #\n) (== d #\N))
+                        (buffer-add-byte! b (if (== d #\~) #\~ #\newline))]
                        [else
                         (unless (pair? args) (format-error who (lit "the format string takes more arguments than it was given")))
-                        (cond [(or (== d 97) (== d 65)) (write-value b (car args) #t)]
-                              [(or (== d 115) (== d 83) (== d 118) (== d 86) (== d 101) (== d 69)) (write-value b (car args) #f)]
+                        (cond [(or (== d #\a) (== d #\A)) (write-value b (car args) #t)]
+                              [(or (== d #\s) (== d #\S) (== d #\v) (== d #\V) (== d #\e) (== d #\E)) (write-value b (car args) #f)]
                               [else (format-error who (lit "the format string has an unknown directive"))])
                         (set! args (cdr args))]))
                (+= i 2)])))
@@ -1175,7 +1176,7 @@
           [else
            (write-value (& b) first #t)
            (while (pair? rest)
-             (buffer-add-byte! (& b) 32)
+             (buffer-add-byte! (& b) #\space)
              (write-value (& b) (car rest) #f)
              (set! rest (cdr rest)))])
     (fail-with (& b))))
