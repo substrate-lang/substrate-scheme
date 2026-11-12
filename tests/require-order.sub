@@ -3,6 +3,7 @@
 (require-unqualified std/test/test)
 (require-unqualified std/package/path)
 (require-unqualified std/test/run)
+(require-unqualified std/string)
 
 (test require-order #:grants ((toolchain))
   (let* ([d (scratch-directory)] [cache (shared-cache)])
@@ -15,17 +16,12 @@
     (fs-list a (& names) 0)
     (for ([i u32 0]) (< i (-> names length)) (+= i 1)
       (let ([name (@ names i)])
-        (when (and (or (starts? name "order-m.") (starts? name "order-n.")) (ends? name ".wasm"))
+        (when (and (or (string-prefix? name "order-m.") (string-prefix? name "order-n.")) (string-suffix? name ".wasm"))
           (+= n 1)
           (unless (== (text-in (joined-path a name)) (text-in (joined-path b name)))
-            (throw test-failed (joined name " differs from order-a's"))))))
+            (throw test-failed (string-append 0 name " differs from order-a's"))))))
     n))
 
 (define (text-in [path string]) -> string
   (let ([bytes (slice u8)]) (if (fs-read-file path (& bytes) 0) (cast string bytes) "")))
 
-(define (joined [a string] [b string]) -> string
-  (let ([out (make-buffer)])
-    (buffer-add-string! (& out) a)
-    (buffer-add-string! (& out) b)
-    (buffer-string (& out))))

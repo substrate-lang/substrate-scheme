@@ -510,7 +510,7 @@
   (cond [(== d 0) (buffer-add-string! b "#f")]
         [(fixnum? d)
          (let ([n (fixnum-value d)])
-           (when (< n 0) (buffer-add-byte! b 45))
+           (when (< n 0) (buffer-add-byte! b #\-))
            (write-digits b (cast u64 (if (< n 0) (- 0 n) n)) 10))]
         [(char? d) (if display (buffer-add-utf-8! b (char->integer d)) (write-char b (char->integer d)))]
         [(== d nil) (buffer-add-string! b "()")]
@@ -523,23 +523,23 @@
                  [(== tag tag-string)
                   (if display (buffer-add-string! b (datum->string d)) (write-string b (datum->string d)))]
                  [(== tag tag-integer)
-                  (when (integer-negative? d) (buffer-add-byte! b 45))
+                  (when (integer-negative? d) (buffer-add-byte! b #\-))
                   (write-digits b (cast u64 (if (integer-negative? d) (- 0 (integer-value d)) (integer-value d))) 10)]
                  [(== tag tag-flonum) (write-flonum b (flonum-value d))]
-                 [else (buffer-add-string! b "#<node ") (write-digits b tag 10) (buffer-add-byte! b 62)]))]))
+                 [else (buffer-add-string! b "#<node ") (write-digits b tag 10) (buffer-add-byte! b #\>)]))]))
 
 (define (write-pair [b (ptr buffer)] [d datum] [display bool])
-  (buffer-add-byte! b 40)
+  (buffer-add-byte! b #\()
   (write-to b (car d) display)
   (set! d (cdr d))
   (while (pair? d)
-    (buffer-add-byte! b 32)
+    (buffer-add-byte! b #\space)
     (write-to b (car d) display)
     (set! d (cdr d)))
   (unless (null? d)
     (buffer-add-string! b " . ")
     (write-to b d display))
-  (buffer-add-byte! b 41))
+  (buffer-add-byte! b #\)))
 
 ;; ---- quoted data ----
 
