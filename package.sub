@@ -1,4 +1,4 @@
 (package scheme
-  (version "0.11.1")
-  (substrate "0.11.1")
+  (version "0.12.0")
+  (substrate "0.12.0")
   (exports core lower output rules runtime test values))
