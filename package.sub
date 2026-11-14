@@ -1,4 +1,6 @@
 (package scheme
   (version "0.12.0")
   (substrate "0.12.0")
-  (exports core lower output rules runtime test values))
+  (exports core lower output rules runtime test values)
+  (programs (order-a "tests/order-a.sub") (order-b "tests/order-b.sub"))
+  (tests "tests/*.sub"))
