@@ -284,8 +284,10 @@
               #,@(for/list ([p params] [a args] #:when (borrowed? p bs)) #`(drop-value #,a))
               r))))
 
+  ;; A name in this module for what goes with id's binding: f.code for f, and %.f.code for .f.
   (define (hidden-name [id datum] [suffix datum]) -> datum
-    (datum->syntax #'here (string->symbol (format-message "~a~a" `(,(syntax-e id) ,suffix))) id))
+    (let ([dot (== (@ (symbol->string (syntax-e id)) 0) #\.)])
+      (datum->syntax #'here (string->symbol (format-message "~a~a~a" `(,(if dot '"%" '"") ,(syntax-e id) ,suffix))) id)))
 
   (define (scheme-lambda [stx datum]) -> datum (placed-lambda (marked-lambda-of stx 0)))
 
@@ -366,7 +368,7 @@
            [specs (syntax->list (caddr parts))]
            [all-mutable (struct-options (cdddr parts))]
            [fields (for/list ([s specs]) (field-name s))]
-           [make (datum->syntax #'here (syntax-e name) name)]
+           [make (hidden-name name '"")]
            [pred (named-after name '"" '"?")])
       (unless (identifier? name) (raise-syntax-error 0 "expected (struct name (field ...) option ...)" stx))
       (unless specs (raise-syntax-error 'struct "expected a list of fields" (caddr parts)))
