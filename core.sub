@@ -284,7 +284,7 @@
               #,@(for/list ([p params] [a args] #:when (borrowed? p bs)) #`(drop-value #,a))
               r))))
 
-  ;; A name in this module for what goes with id's binding: f.code for f, and %.f.code for .f.
+  ;; In Substrate a name that starts with a dot is a case, so the names made for .f start with %.
   (define (hidden-name [id datum] [suffix datum]) -> datum
     (let ([dot (== (@ (symbol->string (syntax-e id)) 0) #\.)])
       (datum->syntax #'here (string->symbol (format-message "~a~a~a" `(,(if dot '"%" '"") ,(syntax-e id) ,suffix))) id)))

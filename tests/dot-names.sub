@@ -1,4 +1,4 @@
-;; Names that start with a dot, which R7RS allows: variables, functions, a struct and a symbol.
+;; Names that start with a dot, as R7RS allows: a variable, a function, a struct and a symbol.
 (language scheme)
 (require-unqualified scheme/output)
 
