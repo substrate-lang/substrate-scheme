@@ -1,4 +1,4 @@
-;; Parameters a function only reads are inferred borrowed; each check leaks nothing.
+;; Parameters that a function only reads are inferred as borrowed, and each check leaks nothing.
 (language scheme)
 (require-unqualified scheme/output)
 (require-unqualified "fixtures/borrowed-more.sub")

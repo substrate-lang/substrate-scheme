@@ -1,4 +1,4 @@
-;; dynamic-wind runs its after thunk for an exception that isn't Scheme's, a wasm tag's.
+;; dynamic-wind runs its after thunk for an exception that is not Scheme's, such as a wasm tag's.
 (language scheme)
 (require wasm compiler/wasm)
 (wasm:tag foreign ())

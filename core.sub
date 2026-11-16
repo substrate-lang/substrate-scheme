@@ -120,7 +120,7 @@
 
   ;; ---- define, lambda, calls, literals ----
 
-  ;; ((required ...) . rest), rest a name or #f.
+  ;; Gives ((required ...) . rest), where rest is a name or #f.
   (define (parse-params [ps datum]) -> datum
     (when (identifier? ps) (return (cons nil ps)))
     (let ([l (splice-list ps)] [required nil])
@@ -177,7 +177,7 @@
 
   (define (placed-lambda [m datum]) -> datum (if (in-pass?) m (convert-lambda #'here m)))
 
-  ;; #:borrow (x ...): read without being owned.
+  ;; #:borrow (x ...) names parameters that are read without being owned.
   (define (scheme-define [stx datum]) -> datum
     (set! defined-free #f)
     (let* ([parts (syntax->list stx)] [opts (define-options (cddr parts))]
@@ -197,10 +197,10 @@
             (when borrowed (raise-syntax-error 'define "only a function with fixed parameters can borrow them" stx))
             #`(#,(core 'global) #,name (mut i32) (scheme-expr #,(marked-lambda `((,(cdr head) ,@body)) name #t stx)))))))
 
-  ;; #:free: the function's value needs no counting: a fixnum, a boolean or ().
+  ;; #:free says that the function's value needs no counting, since it is a fixnum, a boolean or ().
   (define defined-free bool #f)
 
-  ;; (inline borrowed body), inline a fixnum.
+  ;; Gives (inline borrowed body), where inline is a fixnum.
   (define (define-options [forms datum]) -> datum
     (let ([inline #f] [borrowed datum 0])
       (while (pair? forms)
@@ -446,7 +446,7 @@
 (define-syntax closure-fact closure-fact)
 
 ;; ---- functions ----
-;; A value is a datum, a word; a literal is a wasm number unless quoted.
+;; A value is a datum, which is a word. A literal is a wasm number unless it is quoted.
 
 (define (dup-value [d v:datum]) #:inline -> v:datum (v:dup-inline d))
 (#%fact dup-value '(foreign owned))

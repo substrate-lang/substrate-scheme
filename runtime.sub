@@ -28,7 +28,7 @@
          exit-with exit-status)
 
 ;; ---- kinds ----
-;; After values.sub's tags (0 to 7); core.sub's inline code assumes closures 9, structs 14.
+;; These come after values.sub's tags, 0 to 7. core.sub's inline code assumes that closures are 9 and structs are 14.
 
 (const kind-closure u32 9)
 (const kind-box u32 10)

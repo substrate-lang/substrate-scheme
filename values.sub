@@ -573,7 +573,7 @@
           [(keyword? d) #`(string->keyword #,(syn (string->datum (keyword->string d))))]
           [(string? d) #`(string->datum #,(syn d))]
           [(fixnum-range? d) #`(cast datum #,(syn (fixnum-word d)))]
-          ;; An integer up to 2^63 is its i64; one above, its magnitude.
+          ;; An integer up to 2^63 is its i64, and one above is its magnitude.
           [(integer? d) (if (or (integer-negative? d) (>= (integer-value d) 0))
                             #`(make-integer (cast i64 #,(syn d)))
                             #`(make-unsigned-integer (cast u64 #,(syn d))))]
