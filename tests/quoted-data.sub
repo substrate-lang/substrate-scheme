@@ -1,4 +1,4 @@
-;; Quoted data is made when the module starts; each kind survives; equal symbols are one.
+;; Quoted data is made when the module starts. Each kind survives, and equal symbols are one.
 (language scheme)
 (require-unqualified scheme/output)
 

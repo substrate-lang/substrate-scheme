@@ -1,0 +1,14 @@
+;; Names that start with a dot, as R7RS allows: a variable, a function, a struct and a symbol.
+(language scheme)
+(require-unqualified scheme/output)
+
+(define .x 41)
+(define (.inc n) (+ n 1))
+(struct .pair (left right))
+
+(define (run)
+  (let ([.y (.pair (.inc .x) '.sym)])
+    (write (list (.pair-left .y) (.pair-right .y) (.pair? .y)))
+    (newline)))
+
+(test dot-names (expect-output "(42 .sym #t)" (run)))

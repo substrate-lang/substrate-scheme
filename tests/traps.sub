@@ -10,7 +10,7 @@
   (with-handlers ([string? (lambda (s) s)])
     (car 5)))
 
-;; A mistake such as car of a non-pair stops the program; handlers see only raised values.
+;; A mistake such as car of a non-pair stops the program, and handlers see only raised values.
 (test err-mistake #:traps "car: expected a pair, got 5"
   (display (with-handlers ([(lambda (v) #t) (lambda (v) 'caught)]) (car 5))))
 
@@ -35,7 +35,7 @@
 
 (test err-scheme-clause #:traps "f: no clause takes 2 arguments" (f 1 2))
 
-;; An eq? hash table's key must carry a hash; a pair does not.
+;; An eq? hash table's key must carry a hash, and a pair does not.
 (test err-scheme-eq-key
   #:traps "hash-set!: expected a key with a hash (a symbol, keyword, struct, number, character, boolean or ()); make-hash takes others, got (1 2)"
   (hash-set! (make-hasheq) (list 1 2) 'x))
@@ -46,7 +46,7 @@
 ;; error displays its message and writes its irritants.
 (test err-scheme-error #:traps "bad things: x \"y\" 42 (1 #\\z)" (error "bad things:" 'x "y" 42 '(1 #\z)))
 
-;; A format string ending in ~ is an error, its message written as it is.
+;; A format string that ends in ~ is an error, and its message is written as it is.
 (test err-scheme-format-tilde #:traps "format: the format string ends in ~" (format "abc~"))
 
 ;; hash-ref of a missing key with no default is an error.

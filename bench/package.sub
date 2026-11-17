@@ -1,3 +1,6 @@
 (package scheme-bench
   (version "0.9.0")
-  (dependencies (scheme (path ".."))))
+  (dependencies (scheme (path "..")))
+  (programs (big-arith "big-arith.sub") (big-calls "big-calls.sub") (big-conses "big-conses.sub")
+            (big-traverse "big-traverse.sub") (closures "closures.sub") (interp "interp.sub") (lists "lists.sub")
+            (queens "queens.sub") (strings "strings.sub")))

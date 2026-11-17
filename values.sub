@@ -2,6 +2,7 @@
 (require-unqualified compiler/writer)
 (require nodes "nodes.sub" node-alloc node-free nodes-live node-lists)
 (require wasm compiler/wasm)
+(require-unqualified std/vector)
 
 (provide datum node
          nil true-node permanent! dup drop live-nodes node-tag node? tagged?
@@ -165,17 +166,10 @@
   (wasm:i32.store node-lists d 12))
 (#%fact free-pair-shell! '(foreign void))
 
-(define drop-stack (ptr datum) 0)
-(define drop-room u32 0)
-(define drop-top u32 0)
+(define drop-stack (vector datum))
 (define dropping bool #f)
 
-(define (push-drop! [d datum])
-  (when (>= drop-top drop-room)
-    (set! drop-room (if (== drop-room 0) 64 (* drop-room 2)))
-    (set! drop-stack (cast (ptr datum) (realloc drop-stack (* drop-room 4)))))
-  (set! (@ drop-stack drop-top) d)
-  (+= drop-top 1))
+(define (push-drop! [d datum]) (vector-push! (& drop-stack) d))
 
 (define (push-held! [d datum])
   (when (and (node? d) (< (-> d w) permanent-base)) (push-drop! d)))
@@ -197,8 +191,8 @@
                        (set! (@ heads 3) (cast u32 p))
                        (set! u (if (and (== (bit-and b 3) 0) (!= b 0) (< (@ (cast (ptr u32) b) 0) permanent-base)) (cast datum b) 0)))]
                     [else (free-other! u w) (set! u 0)])))
-          (if (> drop-top 0)
-              (begin (-= drop-top 1) (set! u (@ drop-stack drop-top)))
+          (if (> (vector-count (& drop-stack)) 0)
+              (set! u (vector-pop! (& drop-stack)))
               (set! more #f)))
         (set! dropping #f))))
 (#%fact free-node! '(foreign void 0))
@@ -579,7 +573,7 @@
           [(keyword? d) #`(string->keyword #,(syn (string->datum (keyword->string d))))]
           [(string? d) #`(string->datum #,(syn d))]
           [(fixnum-range? d) #`(cast datum #,(syn (fixnum-word d)))]
-          ;; An integer up to 2^63 is its i64; one above, its magnitude.
+          ;; An integer up to 2^63 is its i64, and one above is its magnitude.
           [(integer? d) (if (or (integer-negative? d) (>= (integer-value d) 0))
                             #`(make-integer (cast i64 #,(syn d)))
                             #`(make-unsigned-integer (cast u64 #,(syn d))))]

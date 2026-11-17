@@ -1,4 +1,4 @@
-;; Functions another module calls: total's parameter is inferred borrowed, pair-up's not.
+;; Functions that another module calls. total's parameter is inferred as borrowed, and pair-up's parameter is not.
 (language scheme)
 (provide total pair-up)
 
